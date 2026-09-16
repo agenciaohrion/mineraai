@@ -8,8 +8,17 @@ Plataforma completa que une três capacidades em um só produto:
 | **Kalodata** (analytics de TikTok Shop) | 📦 **Produtos**: ranking com GMV estimado, unidades, crescimento, curva 14 dias, comissões + 👤 **Criadores** + 🔴 **Vídeos & Lives** (live commerce) |
 | **DarkLab AI** (laboratório para canais dark) | ✨ **Estúdio IA**: hooks virais, roteiros UGC/dark cena a cena, legendas + hashtags, títulos SEO YouTube, 🧪 **Viral Lab** (engenharia reversa de vídeo viral com outlier score), 🎙️ **Voice Studio** (marcação de pausas/emoção + prévia de voz grátis) e 🧭 **Radar de Nichos** (micro-nichos antes da onda) |
 
-Além disso: **Dashboard** com visão do dia, **Biblioteca** para salvar qualquer item
-(persistência local) e **APIs & Conexões** com gestão de chaves e teste de conexão.
+Além disso: **Dashboard** com visão do dia + **termos em alta em tempo real
+(Google Trends BR)**, **Biblioteca** para salvar qualquer item (persistência
+local) e **APIs & Conexões** com gestão de chaves e teste de conexão.
+
+### Fontes de dados em 3 camadas (cada item é rotulado)
+
+| Selo | Fonte | Quando |
+|---|---|---|
+| 🟢 `oficial` | APIs oficiais (YouTube Data v3, TikTok Research, IG Graph) | chaves configuradas |
+| 🔵 `coleta real` | **[Scrapling](https://github.com/D4Vinci/Scrapling)** — coleta pública em tempo real das páginas de busca, com fingerprint TLS de Chrome | ligada por padrão, sem chave |
+| 🟣 `demo` | Motor determinístico de demonstração | fallback sempre disponível |
 
 > Design, código e textos 100% originais — as plataformas acima foram usadas apenas
 > como referência de *funcionalidades* (features não são copiáveis, código/design sim).
@@ -30,6 +39,30 @@ exibe o selo `demo` ou `oficial` indicando a origem do dado.
 ---
 
 ## 🔌 APIs utilizadas (pesquisa de viabilidade, set/2026)
+
+### Scrapling — coleta pública sem chave (integrado)
+
+O repositório [D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) foi
+integrado como camada intermediária de dados reais:
+
+- `Fetcher` com **impersonação de Chrome** (TLS fingerprint) e headers stealth;
+- **YouTube**: parsing do JSON `ytInitialData` embutido na página de busca —
+  retorna vídeos reais com views, canal, duração e data (sem cota, sem chave);
+- **TikTok**: parsing do `__UNIVERSAL_DATA_FOR_REHYDRATION__` da busca;
+- **Instagram**: tentativa na página pública de hashtag (normalmente exige
+  login — para IG o caminho recomendado segue sendo a Graph API oficial);
+- **Google Trends**: RSS público oficial → termos em alta no Brasil em tempo
+  real, exibidos no Dashboard e clicáveis para garimpar no Radar Viral;
+- **Circuit breaker**: se uma varredura falhar por completo (ex.: servidor sem
+  saída de rede), a coleta entra em cooldown de 10 min para não atrasar buscas;
+  qualquer sucesso reseta o circuito;
+- **Modo stealth opcional** (`scrapling install` + checkbox na aba de APIs)
+  usa o StealthyFetcher com navegador real para sites com anti-bot pesado.
+
+Uso responsável: 1 requisição por plataforma/busca, timeouts curtos, retries
+mínimos e sem contornar login/paywall.
+
+Testes dos parsers (sem rede): `.venv/bin/python -m server.tests_scrapling`
 
 ### Oficiais — prioridade do projeto
 
@@ -67,19 +100,21 @@ prioridade e são mesclados automaticamente.
 
 ```
 server/
-  main.py          # FastAPI + rotas (/api/*) e servido do frontend
-  providers.py     # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
-  data.py          # Motor demo determinístico (semente por query/plataforma)
-  ai_engine.py     # Estúdio IA: motor interno de copy + adaptadores Groq/Gemini/OpenAI
-  storage.py       # Persistência JSON (biblioteca + configurações/chaves)
-static/            # SPA em JS puro (sem build): dashboard, radar, produtos, studio…
-data/              # Arquivos persistidos em runtime (gitignored)
+  main.py              # FastAPI + rotas (/api/*) e servido do frontend
+  providers.py         # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
+  scrapling_sources.py # Camada COLETA: Scrapling (YouTube/TikTok/IG + Google Trends)
+  data.py              # Motor demo determinístico (semente por query/plataforma)
+  ai_engine.py         # Estúdio IA: motor interno de copy + adaptadores Groq/Gemini/OpenAI
+  storage.py           # Persistência JSON (biblioteca + configurações/chaves)
+  tests_scrapling.py   # Testes offline dos parsers de coleta (fixtures locais)
+static/                # SPA em JS puro (sem build): dashboard, radar, produtos, studio…
+data/                  # Arquivos persistidos em runtime (gitignored)
 ```
 
 **Decisões-chave**
 
-1. **Esquema de dados unificado**: todo vídeo/produto/criador passa por `normalize_video()`,
-   então trocar demo ↔ API oficial não muda o frontend.
+1. **Esquema de dados unificado**: todo vídeo — oficial, coleta ou demo — passa
+   por `normalize_video()`, então o frontend não muda com a fonte dos dados.
 2. **Viral score**: `0.50·velocidade + 0.35·engajamento + 0.15·recência` (0–100).
 3. **GMV estimado** (modelo Kalodata): `unidades × preço × fator de comissão`, sempre
    rotulado como estimativa.
@@ -92,11 +127,12 @@ data/              # Arquivos persistidos em runtime (gitignored)
 
 ```
 GET  /api/status                      # modo atual + conectividade dos providers
-GET  /api/search?q=&platform=&period=&sort=&min_views=
+GET  /api/search?q=&platform=&period=&sort=&min_views=   # oficial → coleta → demo
+GET  /api/trends?limit=               # termos em alta (Google Trends BR, tempo real)
 GET  /api/products?q=&category=&sort= | GET /api/products/{id}
 GET  /api/creators  GET /api/lives  GET /api/niches
 POST /api/ai/hooks | /api/ai/script | /api/ai/caption | /api/ai/titles
 POST /api/ai/analyze | /api/ai/narration
 GET/POST/DELETE /api/library
-GET/POST /api/settings  ·  POST /api/settings/test/{youtube|tiktok|instagram}
+GET/POST /api/settings  ·  POST /api/settings/test/{youtube|tiktok|instagram|coleta}
 ```

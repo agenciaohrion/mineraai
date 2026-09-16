@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ai_engine, data as demo, providers, storage
+from . import ai_engine, data as demo, providers, scrapling_sources, storage
 
 ROOT = Path(__file__).resolve().parent.parent
 app = FastAPI(title="MineraAI", version="1.0.0",
@@ -53,6 +53,11 @@ def provider_status() -> dict:
                               or cfg.get("OPENAI_API_KEY")),
             "custo": "Motor interno grátis incluso · LLMs externos opcionais",
         },
+        "coleta": {
+            "oficial": "Scrapling — coleta pública em tempo real",
+            "conectado": scrapling_sources.coleta_enabled(),
+            "custo": "Open source · sem chave · dados públicos reais (1 req/busca)",
+        },
     }
 
 
@@ -74,17 +79,16 @@ async def search(q: str = "tendências", platform: str = "all", period: str = "3
     limit = max(3, min(limit, 30))
 
     demo_set = demo.search_aggregate(q, plats, period, min_views, limit)
-    videos = list(demo_set["videos"])
-    official = []
+    st = provider_status()
+    official, coletados = [], []
 
-    # APIs oficiais (quando conectadas) entram na frente
+    # 1) APIs oficiais (quando conectadas) — em paralelo
     jobs = []
-    if "youtube" in plats and provider_status()["youtube"]["conectado"]:
-        jobs.append(providers.youtube_search(q, max_results=limit,
-                                             order="viewCount"))
-    if "tiktok" in plats and provider_status()["tiktok"]["conectado"]:
+    if "youtube" in plats and st["youtube"]["conectado"]:
+        jobs.append(providers.youtube_search(q, max_results=limit, order="viewCount"))
+    if "tiktok" in plats and st["tiktok"]["conectado"]:
         jobs.append(providers.tiktok_search(q, max_results=limit))
-    if "instagram" in plats and provider_status()["instagram"]["conectado"]:
+    if "instagram" in plats and st["instagram"]["conectado"]:
         jobs.append(providers.instagram_hashtag_search(q, max_results=limit))
     if jobs:
         results = await asyncio.gather(*jobs, return_exceptions=True)
@@ -92,8 +96,27 @@ async def search(q: str = "tendências", platform: str = "all", period: str = "3
             if isinstance(res, list):
                 official += res
 
-    if official:
-        videos = official + videos
+    # 2) Coleta pública via Scrapling (sem chave) — em thread, com teto de tempo
+    coleta_errors = []
+    if st["coleta"]["conectado"]:
+        try:
+            res = await asyncio.wait_for(
+                asyncio.to_thread(scrapling_sources.collect, q, plats, limit),
+                timeout=50)
+            coletados = res.get("videos", [])
+            coleta_errors = res.get("errors", [])
+        except Exception:
+            coleta_errors = ["timeout na coleta"]
+
+    # 3) Mescla: oficial > coleta > demo (dedupe por título+autor)
+    videos, seen = [], set()
+    for v in official + coletados + demo_set["videos"]:
+        key = (v["platform"], (v["title"] or "").lower()[:60],
+               (v["author"] or "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        videos.append(v)
     if min_views:
         videos = [v for v in videos if v["views"] >= min_views]
 
@@ -105,8 +128,10 @@ async def search(q: str = "tendências", platform: str = "all", period: str = "3
         "query": q, "period": period, "sort": sort,
         "source_breakdown": {
             "oficial": sum(1 for v in videos if v["source"] == "oficial"),
+            "coleta": sum(1 for v in videos if v["source"] == "coleta"),
             "demo": sum(1 for v in videos if v["source"] == "demo"),
         },
+        "coleta_errors": coleta_errors,
         "videos": videos[:limit * len(plats)],
         "top_hashtags": demo_set["top_hashtags"],
         "top_sounds": demo_set["top_sounds"],
@@ -144,6 +169,22 @@ async def lives(limit: int = 12):
     return {"lives": ls,
             "gmv_total": sum(l["gmv"] for l in ls),
             "ao_vivo_agora": sum(1 for l in ls if l["live_now"])}
+
+
+# ------------------------------------------------------------ tendências reais
+@app.get("/api/trends")
+async def trends(limit: int = 12):
+    """Termos em alta agora no Brasil — Google Trends (RSS público, grátis)."""
+    if not scrapling_sources.coleta_enabled():
+        return {"terms": [], "fonte": "desativado"}
+    try:
+        terms = await asyncio.wait_for(
+            asyncio.to_thread(scrapling_sources.google_trends_br, min(limit, 20)),
+            timeout=30)
+        return {"terms": terms, "fonte": "Google Trends BR (tempo real)"}
+    except Exception as e:
+        return {"terms": [], "fonte": "indisponível",
+                "erro": f"{type(e).__name__}: {str(e)[:90]}"}
 
 
 # ------------------------------------------------------------ radar de nichos
@@ -274,6 +315,9 @@ async def save_settings(body: SettingsIn):
 async def test_service(service: str):
     if service == "youtube":
         return await providers.youtube_key_test()
+    if service == "coleta":
+        return await asyncio.wait_for(
+            asyncio.to_thread(scrapling_sources.health_check), timeout=60)
     if service == "instagram":
         return await providers.ig_token_test()
     if service == "tiktok":

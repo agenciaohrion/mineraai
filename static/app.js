@@ -145,7 +145,7 @@ function videoCard(v) {
     <div class="vid-body">
       <div class="vid-title">${esc(v.title)}</div>
       <div class="vid-author">${esc(v.handle || v.author)} · ${timeAgoH(v.age_hours)}
-        <span class="src-badge src-${v.source}">${v.source === "oficial" ? "oficial" : "demo"}</span></div>
+        <span class="src-badge src-${v.source}">${{ oficial: "oficial", coleta: "coleta real", demo: "demo" }[v.source] || v.source}</span></div>
       <div class="vid-metrics">
         <span>👁 <b>${fmtNum(v.views)}</b></span>
         <span>❤ <b>${fmtNum(v.likes)}</b></span>
@@ -200,11 +200,22 @@ async function viewDashboard() {
       <div class="card"><h3>📦 Top produtos (GMV est. 30d)</h3><div id="dash-products">…</div></div>
       <div class="card"><h3>🔴 Lives faturando agora</h3><div id="dash-lives">…</div></div>
     </div>
-    <div class="card" style="margin-top:14px"><h3>🧭 Nichos com maior outlier score</h3><div id="dash-niches">…</div></div>`;
+    <div class="card" style="margin-top:14px"><h3>🧭 Nichos com maior outlier score</h3><div id="dash-niches">…</div></div>
+    <div class="card" style="margin-top:14px"><h3>📈 Termos em alta agora — Google Trends BR <span id="trends-fonte" class="badge gray"></span></h3><div id="dash-trends">…</div></div>`;
 
-  const [prod, lives, niches] = await Promise.all([
+  const [prod, lives, niches, trends] = await Promise.all([
     api("/products?limit=6&sort=gmv"), api("/lives?limit=5"), api("/niches?limit=5"),
+    api("/trends?limit=12").catch(() => ({ terms: [], fonte: "indisponível" })),
   ]);
+
+  $("#trends-fonte").textContent = trends.fonte || "";
+  $("#dash-trends").innerHTML = trends.terms?.length
+    ? `<div class="tags-row" style="gap:8px">${trends.terms.map(t => `
+        <span class="chip" style="cursor:pointer" onclick="trendToRadar(${jattr(t.term)})">
+          🔥 ${esc(t.term)} <small class="num" style="color:var(--gold)">${fmtNum(t.traffic)}+</small>
+        </span>`).join("")}</div>
+      <small style="color:var(--faint);display:block;margin-top:10px">Clique em um termo para garimpá-lo no Radar Viral.</small>`
+    : `<div class="empty">Google Trends indisponível neste ambiente (rede restrita). Em produção, este widget mostra os termos mais buscados do Brasil em tempo real.</div>`;
 
   const avgGrowth = prod.products.reduce((s, p) => s + p.growth, 0) / Math.max(prod.products.length, 1);
   $("#kpis").innerHTML = `
@@ -249,6 +260,12 @@ async function viewDashboard() {
 const kpi = (label, value, sub, color = "var(--gold)") =>
   `<div class="card kpi"><span class="label">${label}</span>
    <span class="value" style="color:${color}">${value}</span><span class="sub">${sub}</span></div>`;
+
+window.trendToRadar = (term) => {
+  state.lastSearch = { q: term };
+  location.hash = "#/radar";
+  setTimeout(() => { const el = $("#radar-q"); if (el) { el.value = term; runRadar(); } }, 150);
+};
 
 // ============================================================ RADAR VIRAL
 async function viewRadar() {
@@ -303,12 +320,15 @@ async function runRadar(saved) {
   $("#radar-results").innerHTML = skeletonGrid(6);
   const data = await api("/search?" + params);
   const { source_breakdown: sb } = data;
+  const real = sb.oficial + sb.coleta;
   $("#radar-summary").innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span class="badge gold">${data.total} vídeos encontrados</span>
       <span class="badge green">oficial: ${sb.oficial}</span>
+      <span class="badge cyan">coleta real: ${sb.coleta}</span>
       <span class="badge violet">demo: ${sb.demo}</span>
-      ${sb.oficial === 0 ? '<small style="color:var(--muted)">— conecte suas chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span> para dados reais</small>' : ""}
+      ${(data.coleta_errors || []).length ? `<span class="badge gray" title="${esc(data.coleta_errors.join(" · "))}">⚠ coleta parcial</span>` : ""}
+      ${real === 0 ? '<small style="color:var(--muted)">— conecte chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span> ou verifique a coleta Scrapling</small>' : ""}
     </div>`;
   $("#radar-results").innerHTML = data.videos.length
     ? `<div class="vid-grid">${data.videos.map(videoCard).join("")}</div>`
@@ -833,6 +853,10 @@ async function viewApis() {
       ["GEMINI_API_KEY", "Gemini API key (opcional)", "password"]],
       docs: "https://console.groq.com/keys",
       how: "O motor interno de copywriting já é 100% gratuito. Groq (Llama) e Google Gemini possuem tiers gratuitos generosos para elevar a qualidade dos textos gerados." },
+    { k: "coleta", icon: "🕷️", fields: [],
+      docs: "https://github.com/D4Vinci/Scrapling",
+      how: "Sem chave nenhuma: o Scrapling (open source) coleta dados públicos reais das páginas de busca — YouTube direto, TikTok/Instagram quando acessíveis — com fingerprint TLS de Chrome. 1 requisição por busca, timeouts curtos. Desative abaixo se preferir apenas APIs oficiais + demo.",
+      extra: "toggle" },
   ];
 
   $("#api-cards").innerHTML = defs.map(d => {
@@ -847,10 +871,21 @@ async function viewApis() {
         <div class="field" style="margin-bottom:8px"><label>${label}</label>
         <input type="${type}" id="set-${name}" placeholder="${cfg.settings[name] ? "••• " + cfg.settings[name] + " (salvo)" : "colar aqui…"}" /></div>`).join("")}
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn primary small" onclick="saveProvider('${d.k}', ${JSON.stringify(d.fields.map(f => f[0]))})">💾 Salvar</button>
+      ${d.extra === "toggle" ? `
+        <div class="form-row" style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+            <input type="checkbox" id="set-SCRAPLING_ENABLED" style="width:auto" ${(cfg.settings.SCRAPLING_ENABLED ?? "1") !== "0" ? "checked" : ""} />
+            Coleta pública ativada (fonte: <span class="src-badge src-coleta">coleta real</span>)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)">
+            <input type="checkbox" id="set-SCRAPLING_STEALTHY" style="width:auto" ${(cfg.settings.SCRAPLING_STEALTHY ?? "0") === "1" ? "checked" : ""} />
+            Modo stealth (requer <code>scrapling install</code>)
+          </label>
+        </div>` : ""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn primary small" onclick="saveProvider('${d.k}', ${JSON.stringify(d.fields.map(f => f[0]).concat(d.extra === "toggle" ? ["SCRAPLING_ENABLED", "SCRAPLING_STEALTHY"] : []))})">💾 Salvar</button>
         <button class="btn small" onclick="testProvider('${d.k}')">🔍 Testar conexão</button>
-        <a class="btn small ghost" href="${d.docs}" target="_blank" rel="noopener">📖 Como obter</a>
+        <a class="btn small ghost" href="${d.docs}" target="_blank" rel="noopener">📖 ${d.k === "coleta" ? "Repositório" : "Como obter"}</a>
       </div>
       <div style="margin-top:10px;font-size:12px;color:var(--faint);line-height:1.55">${d.how}</div>
       <div id="test-${d.k}" style="margin-top:8px"></div>
@@ -876,10 +911,15 @@ async function viewApis() {
 }
 window.saveProvider = async (kind, fields) => {
   const patch = {};
-  fields.forEach(f => { const v = $(`#set-${f}`)?.value?.trim(); if (v) patch[f] = v; });
+  fields.forEach(f => {
+    const el = $(`#set-${f}`);
+    if (!el) return;
+    if (el.type === "checkbox") { patch[f] = el.checked ? "1" : "0"; return; }
+    const v = el.value?.trim(); if (v) patch[f] = v;
+  });
   if (!Object.keys(patch).length) return toast("Preencha ao menos um campo", true);
   await api("/settings", { method: "POST", body: { settings: patch } });
-  toast("Credenciais salvas ✔");
+  toast("Configurações salvas ✔");
   loadStatus(); viewApis();
 };
 window.testProvider = async (kind) => {
