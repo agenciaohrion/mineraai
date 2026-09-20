@@ -145,7 +145,7 @@ function videoCard(v) {
     <div class="vid-body">
       <div class="vid-title">${esc(v.title)}</div>
       <div class="vid-author">${esc(v.handle || v.author)} · ${timeAgoH(v.age_hours)}
-        <span class="src-badge src-${v.source}">${{ oficial: "oficial", coleta: "coleta real", demo: "demo" }[v.source] || v.source}</span></div>
+        <span class="src-badge src-${v.source}">${{ oficial: "oficial", coleta: "coleta real", n8n: "n8n automação", demo: "demo" }[v.source] || v.source}</span></div>
       <div class="vid-metrics">
         <span>👁 <b>${fmtNum(v.views)}</b></span>
         <span>❤ <b>${fmtNum(v.likes)}</b></span>
@@ -176,11 +176,15 @@ const routes = {
   lives: viewLives,
   nichos: viewNichos,
   studio: viewStudio,
+  fabrica: viewFabrica,
   biblioteca: viewBiblioteca,
   apis: viewApis,
 };
 
+let fabricaTimer = null;
+
 function router() {
+  if (fabricaTimer) { clearTimeout(fabricaTimer); fabricaTimer = null; }
   const route = (location.hash || "#/dashboard").replace("#/", "") || "dashboard";
   const [name] = route.split("/");
   $$(".nav a").forEach(a => a.classList.toggle("active", a.dataset.route === name));
@@ -303,6 +307,7 @@ async function viewRadar() {
         <div class="card"><h3># Hashtags dominantes</h3><div id="radar-tags">…</div></div>
         <div class="card" style="margin-top:14px"><h3>🎵 Sons em alta</h3><div id="radar-sounds">…</div></div>
         <div class="card" style="margin-top:14px"><h3>👤 Criadores no tema</h3><div id="radar-creators">…</div></div>
+        <div class="card" style="margin-top:14px"><h3>💡 Ideias de pauta <span class="badge gray">Reddit + Google</span></h3><div id="radar-ideas">…</div></div>
       </div>
     </div>`;
   $("#radar-go").onclick = runRadar;
@@ -326,6 +331,7 @@ async function runRadar(saved) {
       <span class="badge gold">${data.total} vídeos encontrados</span>
       <span class="badge green">oficial: ${sb.oficial}</span>
       <span class="badge cyan">coleta real: ${sb.coleta}</span>
+      ${sb.n8n ? `<span class="badge gold">n8n: ${sb.n8n}</span>` : ""}
       <span class="badge violet">demo: ${sb.demo}</span>
       ${(data.coleta_errors || []).length ? `<span class="badge gray" title="${esc(data.coleta_errors.join(" · "))}">⚠ coleta parcial</span>` : ""}
       ${real === 0 ? '<small style="color:var(--muted)">— conecte chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span> ou verifique a coleta Scrapling</small>' : ""}
@@ -342,7 +348,24 @@ async function runRadar(saved) {
   $("#radar-creators").innerHTML = data.top_creators.map(c => `
     <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line-soft);font-size:13px">
       <b>${esc(c.handle)}</b><span class="num" style="color:var(--muted)">${c.videos} víd · ${fmtNum(c.views)}</span></div>`).join("") || "—";
+
+  // Ideias de pauta: Reddit (top real) + Google Suggest (demanda de busca)
+  api("/api/ideas?q=" + encodeURIComponent(q)).then(ideas => {
+    const sug = (ideas.sugestoes || []).map(s => `
+      <span class="chip" style="margin:3px;cursor:pointer;font-size:11.5px"
+        onclick="radarUseIdea(${jattr(s)})">${esc(s)}</span>`).join("");
+    const red = (ideas.reddit || []).slice(0, 4).map(r => `
+      <div style="padding:7px 0;border-bottom:1px dashed var(--line-soft);font-size:12px">
+        <a href="${esc(r.url)}" target="_blank" rel="noopener" style="font-weight:600;line-height:1.35;display:block">${esc(r.title)}</a>
+        <small style="color:var(--muted)">▲ ${fmtNum(r.score)} · 💬 ${fmtNum(r.comments)} · r/${esc(r.subreddit)}</small>
+      </div>`).join("");
+    $("#radar-ideas").innerHTML = (sug || red)
+      ? (sug ? `<div class="tags-row" style="margin-bottom:8px">${sug}</div>` : "") +
+        (red || "")
+      : `<small style="color:var(--faint)">Indisponível neste ambiente (sem rede externa). Em produção mostra o top do Reddit + autocomplete do Google para o tema.</small>`;
+  }).catch(() => {});
 }
+window.radarUseIdea = (term) => { $("#radar-q").value = term; runRadar(); };
 
 // ============================================================ PRODUTOS
 let prodCat = "";
@@ -380,11 +403,44 @@ async function viewProdutos() {
 
 async function loadProducts() {
   $("#prod-table").innerHTML = skeletonGrid(3, 70);
+  $("#ml-real")?.remove();
   const params = new URLSearchParams({ sort: $("#prod-sort").value, limit: "18" });
   const q = $("#prod-q").value.trim();
   if (q) params.set("q", q);
   if (prodCat) params.set("category", prodCat);
   const data = await api("/products?" + params);
+
+  // Mercado Livre — dados REAIS de mercado BR (API pública oficial, grátis)
+  if (data.mercadolivre?.length) {
+    const sig = data.ml_signal || {};
+    const card = document.createElement("div");
+    card.id = "ml-real";
+    card.className = "card";
+    card.style.marginBottom = "14px";
+    card.innerHTML = `
+      <h3>🛒 Mercado real — Mercado Livre Brasil <span class="badge green">dados reais · sem chave</span></h3>
+      <div class="form-row" style="margin-bottom:10px">
+        <span class="badge gold">mediana ${fmtBRL(sig.price_median || 0)}</span>
+        <span class="badge cyan">+${fmtNum(sig.total_sold || 0)} vendidos (amostra)</span>
+        <span class="badge violet">nota média ★ ${sig.avg_rating || "—"}</span>
+        <small style="color:var(--faint)">use como referência de preço/demanda para o GMV estimado</small>
+      </div>
+      <div class="grid cols-3">${data.mercadolivre.slice(0, 6).map(m => `
+        <a class="ml-card" href="${esc(m.permalink)}" target="_blank" rel="noopener">
+          <img src="${esc(m.thumbnail)}" alt="" loading="lazy"
+               onerror="this.style.visibility='hidden'" />
+          <div>
+            <div class="ml-title">${esc(m.title)}</div>
+            <div style="margin-top:4px"><b>${fmtBRL(m.price)}</b>
+              <small style="color:var(--muted)">· ${fmtNum(m.sold_quantity)} vend. · ★${m.rating || "—"}</small>
+              ${m.free_shipping ? '<small style="color:var(--green)"> · frete grátis</small>' : ""}
+            </div>
+          </div>
+        </a>`).join("")}
+      </div>`;
+    $("#prod-table").parentNode.insertBefore(card, $("#prod-table"));
+  }
+
   $("#prod-table").innerHTML = `<table class="table">
     <thead><tr><th>#</th><th>Produto</th><th>Tendência 14d</th><th>GMV est.</th>
     <th>Unidades</th><th>Preço</th><th>Cresc.</th><th>Criadores</th><th></th></tr></thead>
@@ -634,8 +690,9 @@ function tabScript() {
       <div class="divider"></div>
       <b>🎙️ Narração sugerida:</b><br>“${esc(s.narracao)}”
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" onclick="copyText(${JSON.stringify(s.narracao)}, 'Narração copiada!')">📋 Copiar narração</button>
-        <button class="btn small" onclick='sendToVoice(${JSON.stringify(s.narracao)})'>🎙️ Enviar pro Voice Studio</button>
+        <button class="btn small" onclick="copyText(${jattr(s.narracao)}, 'Narração copiada!')">📋 Copiar narração</button>
+        <button class="btn small" onclick='sendToVoice(${jattr(s.narracao)})'>🎙️ Enviar pro Voice Studio</button>
+        <button class="btn small primary" onclick='sendToFabrica(${jattr(s.titulo_sugerido || "vídeo")}, ${jattr(s.narracao)})'>🎬 Gerar vídeo na Fábrica</button>
       </div>
       <div class="divider"></div><b>⚡ Retenção:</b><br>${s.dicas_retencao.map(d => "• " + esc(d)).join("<br>")}`;
   };
@@ -720,6 +777,16 @@ function tabLab() {
       <div class="grid cols-2">
         <div class="card">
           <h3>Diagnóstico <span class="badge ${a.engine === "llm" ? "green" : "violet"}">${a.engine}</span></h3>
+          ${a.video_real ? `
+          <div style="display:flex;gap:12px;background:var(--bg-soft);border:1px solid var(--green-soft);
+            border-radius:12px;padding:10px;margin-bottom:14px;align-items:center">
+            ${a.video_real.thumb ? `<img src="${esc(a.video_real.thumb)}" style="width:96px;border-radius:8px"
+              onerror="this.style.display='none'" />` : ""}
+            <div><span class="badge green">dados reais · oEmbed oficial</span>
+              <div style="font-weight:700;margin-top:6px;font-size:13.5px">${esc(a.video_real.title)}</div>
+              <small style="color:var(--muted)">${esc(a.video_real.author)} · ${a.video_real.platform}</small>
+            </div>
+          </div>` : ""}
           <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
             ${scoreRing(a.outlier_score, 64)}
             <div><b style="font-size:15px">Outlier score ${a.outlier_score}</b><br>
@@ -792,6 +859,147 @@ function tabVoice() {
   $("#voice-stop").onclick = () => speechSynthesis.cancel();
 }
 
+// ============================================================ FÁBRICA DE VÍDEOS
+const JOB_STATUS = {
+  fila: ["⏳", "Fila", "status-fila"],
+  enviado: ["📡", "Enviado ao n8n", "status-enviado"],
+  processando: ["🎞️", "Renderizando (RunPod)", "status-processando"],
+  pronto: ["✅", "Pronto", "status-pronto"],
+  erro: ["⚠️", "Erro", "status-erro"],
+};
+
+async function viewFabrica() {
+  const pre = JSON.parse(sessionStorage.getItem("fabrica-prefill") || "null");
+  sessionStorage.removeItem("fabrica-prefill");
+  $("#view").innerHTML = `
+    <div class="page-head"><div>
+      <h1>Fábrica de Vídeos 🎬</h1>
+      <p>Produção automatizada: o job vai para o <b>n8n</b>, que orquestra modelos de vídeo
+      no <b>ComfyUI (RunPod serverless)</b> e devolve o MP4 aqui. Configure o webhook em
+      <span class="link-gold" onclick="location.hash='#/apis'">APIs & Conexões</span>.</p>
+    </div></div>
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>Novo vídeo</h3>
+        <div class="field" style="margin-bottom:10px"><label>Produto / tema</label>
+          <input id="fab-product" placeholder="ex: garrafa térmica premium" value="${esc(pre?.product || "")}" /></div>
+        <div class="field" style="margin-bottom:10px"><label>Prompt visual (roteiro, cenas, estética)</label>
+          <textarea id="fab-prompt" rows="5" placeholder="Descreva as cenas ou cole o roteiro do Estúdio IA…">${esc(pre?.prompt || "")}</textarea></div>
+        <div class="form-row" style="margin-bottom:14px">
+          <div class="field grow"><label>Estilo</label>
+            <select id="fab-style">
+              <option value="dark">Dark / canal dark</option>
+              <option value="cinematic">Cinematográfico</option>
+              <option value="ugc">UGC (criador)</option>
+              <option value="produto">Showcase de produto</option>
+              <option value="anime">Anime / ilustrado</option>
+            </select></div>
+          <div class="field grow"><label>Duração (s)</label>
+            <input id="fab-dur" type="number" value="6" min="2" max="60" /></div>
+        </div>
+        <div class="form-row">
+          <button class="btn primary" id="fab-go">🚀 Enviar para produção</button>
+          <button class="btn" id="fab-broll">🎞️ Buscar B-roll (Pexels)</button>
+        </div>
+        <div id="fab-broll-out" style="margin-top:12px"></div>
+      </div>
+      <div class="card">
+        <h3>Como funciona o pipeline</h3>
+        <div style="font-size:13px;line-height:1.9;color:var(--muted)">
+          <b style="color:var(--text)">1.</b> MineraAI cria o job e chama o webhook do n8n<br>
+          <b style="color:var(--text)">2.</b> n8n monta o workflow e envia ao endpoint ComfyUI no RunPod<br>
+          <b style="color:var(--text)">3.</b> GPU renderiza (paga só os segundos usados)<br>
+          <b style="color:var(--text)">4.</b> n8n salva o MP4 (R2/Supabase) e chama o callback<br>
+          <b style="color:var(--text)">5.</b> O vídeo aparece aqui com custo e player<br><br>
+          📦 Importe os workflows prontos em <code>n8n/</code> no repositório.
+        </div>
+      </div>
+    </div>
+    <div class="section-title">Fila de produção <button class="btn small" onclick="loadJobs()">↻ Atualizar</button></div>
+    <div class="card"><div id="fab-jobs">…</div></div>`;
+  $("#fab-go").onclick = createJob;
+  $("#fab-broll").onclick = async () => {
+    const q = $("#fab-product").value.trim() || "produto";
+    $("#fab-broll-out").innerHTML = `<small style="color:var(--muted)">Buscando…</small>`;
+    const r = await api("/fabrica/broll?q=" + encodeURIComponent(q));
+    $("#fab-broll-out").innerHTML = r.ok
+      ? `<div class="grid cols-3">${r.items.slice(0, 6).map(b => `
+          <a href="${esc(b.video_file || b.url)}" target="_blank" rel="noopener">
+            <img src="${esc(b.image)}" style="width:100%;border-radius:8px;aspect-ratio:16/9;object-fit:cover"
+              onerror="this.parentNode.style.display='none'" />
+            <small style="color:var(--faint)">${b.duration || ""}s · ${esc(b.user)}</small></a>`).join("")}</div>`
+      : `<small style="color:var(--faint)">${esc(r.message)}</small>`;
+  };
+  loadJobs();
+}
+
+async function createJob() {
+  const product = $("#fab-product").value.trim();
+  if (!product) return toast("Informe o produto/tema", true);
+  const body = {
+    product,
+    prompt: $("#fab-prompt").value.trim(),
+    style: $("#fab-style").value,
+    duration: +$("#fab-dur").value || 6,
+  };
+  const r = await api("/fabrica/jobs", { method: "POST", body });
+  const st = r.job.status;
+  toast(st === "enviado" ? "Job enviado ao n8n 🚀"
+    : st === "erro" ? "n8n inacessível — configure o webhook"
+    : "Job na fila — configure o webhook do n8n para disparar");
+  loadJobs();
+}
+window.createJob = createJob;
+
+async function loadJobs() {
+  const el = $("#fab-jobs");
+  if (!el) return;
+  const data = await api("/fabrica/jobs");
+  if (!data.jobs.length) {
+    el.innerHTML = `<div class="empty">Nenhum job ainda — crie o primeiro vídeo ao lado.
+      ${data.webhook_configurado ? "" : "<br>⚠️ Webhook do n8n não configurado (aba APIs & Conexões)."}</div>`;
+    return;
+  }
+  el.innerHTML = `<table class="table">
+    <thead><tr><th>Job</th><th>Produto</th><th>Estilo</th><th>Status</th><th>Custo</th><th></th></tr></thead>
+    <tbody>${data.jobs.map(j => {
+      const [ico, lb, cls] = JOB_STATUS[j.status] || ["•", j.status, ""];
+      return `<tr>
+        <td style="font-family:monospace;font-size:12px">${j.id}</td>
+        <td><b>${esc(j.product)}</b><br><small style="color:var(--faint)">${j.created_at?.slice(0, 16).replace("T", " ")}</small></td>
+        <td><span class="badge gray">${esc(j.style)} · ${j.duration}s</span></td>
+        <td><span class="job-status ${cls}">${ico} ${lb}</span>
+          ${j.error ? `<br><small style="color:var(--red)">${esc(j.error)}</small>` : ""}</td>
+        <td class="num">${j.cost_usd != null ? "$" + Number(j.cost_usd).toFixed(4) : "—"}</td>
+        <td style="white-space:nowrap">
+          ${j.status === "pronto" && j.video_url
+            ? `<button class="btn small primary" onclick="playJob(${jattr(j)})">▶ Assistir</button>` : ""}
+          <button class="btn small danger" onclick="delJob('${j.id}')">✕</button>
+        </td></tr>`;
+    }).join("")}</tbody></table>`;
+  if (data.jobs.some(j => ["fila", "enviado", "processando"].includes(j.status))) {
+    fabricaTimer = setTimeout(loadJobs, 7000);  // auto-refresh enquanto renderiza
+  }
+}
+window.loadJobs = loadJobs;
+
+window.playJob = (job) => openModal(`
+  <h2>${esc(job.product)}</h2>
+  <video controls autoplay style="width:100%;border-radius:12px;margin-top:12px;background:#000"
+    src="${esc(job.video_url)}"></video>
+  <div style="margin-top:12px;display:flex;gap:10px">
+    <a class="btn primary" href="${esc(job.video_url)}" download>Baixar MP4</a>
+    <button class="btn" onclick="copyText(${jattr(job.video_url)}, 'Link copiado!')">📋 Copiar link</button>
+    ${job.cost_usd != null ? `<span class="badge gold">custo $${Number(job.cost_usd).toFixed(4)}</span>` : ""}
+  </div>`);
+
+window.delJob = async (id) => { await api(`/fabrica/jobs/${id}`, { method: "DELETE" }); loadJobs(); };
+
+window.sendToFabrica = (product, prompt) => {
+  sessionStorage.setItem("fabrica-prefill", JSON.stringify({ product, prompt }));
+  location.hash = "#/fabrica";
+};
+
 // ============================================================ BIBLIOTECA
 async function viewBiblioteca() {
   $("#view").innerHTML = `
@@ -857,6 +1065,16 @@ async function viewApis() {
       docs: "https://github.com/D4Vinci/Scrapling",
       how: "Sem chave nenhuma: o Scrapling (open source) coleta dados públicos reais das páginas de busca — YouTube direto, TikTok/Instagram quando acessíveis — com fingerprint TLS de Chrome. 1 requisição por busca, timeouts curtos. Desative abaixo se preferir apenas APIs oficiais + demo.",
       extra: "toggle" },
+    { k: "fontes_gratuitas", icon: "🆓", fields: [["PEXELS_API_KEY", "Pexels API key (B-roll grátis, opcional)", "password"]],
+      docs: "https://www.pexels.com/api/",
+      how: "Sempre ativas e sem chave: Mercado Livre (produtos reais BR), Reddit (pauta viral), Google Suggest (demanda de busca), Google Trends (termos em alta) e oEmbed YouTube/TikTok (metadados reais de links). A chave Pexels libera B-roll gratuito na Fábrica de Vídeos.",
+      test: "fontes" },
+    { k: "automacao", icon: "🤖", fields: [["N8N_WEBHOOK_URL", "URL do webhook n8n (Fábrica de Vídeos)", "text"],
+      ["N8N_TOKEN", "Token de segurança do callback", "password"],
+      ["MINERAAI_PUBLIC_URL", "URL pública do MineraAI (p/ callbacks)", "text"]],
+      docs: "https://docs.n8n.io/",
+      how: "Cole aqui a URL do webhook do workflow 'Fábrica de Vídeos' (arquivos importáveis em n8n/ no repositório). O n8n orquestra o ComfyUI no RunPod serverless e devolve o MP4 via callback protegido pelo token. MINERAAI_PUBLIC_URL é o endereço que o n8n usa para chamar de volta.",
+      extra: "n8n" },
   ];
 
   $("#api-cards").innerHTML = defs.map(d => {
@@ -884,8 +1102,8 @@ async function viewApis() {
         </div>` : ""}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="btn primary small" onclick="saveProvider('${d.k}', ${JSON.stringify(d.fields.map(f => f[0]).concat(d.extra === "toggle" ? ["SCRAPLING_ENABLED", "SCRAPLING_STEALTHY"] : []))})">💾 Salvar</button>
-        <button class="btn small" onclick="testProvider('${d.k}')">🔍 Testar conexão</button>
-        <a class="btn small ghost" href="${d.docs}" target="_blank" rel="noopener">📖 ${d.k === "coleta" ? "Repositório" : "Como obter"}</a>
+        <button class="btn small" onclick="testProvider('${d.test || d.k}')">🔍 Testar conexão</button>
+        <a class="btn small ghost" href="${d.docs}" target="_blank" rel="noopener">📖 ${d.k === "coleta" ? "Repositório" : d.k === "automacao" ? "Docs n8n" : "Como obter"}</a>
       </div>
       <div style="margin-top:10px;font-size:12px;color:var(--faint);line-height:1.55">${d.how}</div>
       <div id="test-${d.k}" style="margin-top:8px"></div>

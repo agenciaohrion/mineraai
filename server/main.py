@@ -11,13 +11,15 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ai_engine, data as demo, providers, scrapling_sources, storage
+from . import (ai_engine, data as demo, free_sources, pipeline, providers,
+               scrapling_sources, storage)
 
 ROOT = Path(__file__).resolve().parent.parent
 app = FastAPI(title="MineraAI", version="1.0.0",
@@ -57,6 +59,16 @@ def provider_status() -> dict:
             "oficial": "Scrapling — coleta pública em tempo real",
             "conectado": scrapling_sources.coleta_enabled(),
             "custo": "Open source · sem chave · dados públicos reais (1 req/busca)",
+        },
+        "fontes_gratuitas": {
+            "oficial": "Reddit · Mercado Livre · Google Suggest · oEmbed · Trends · Pexels",
+            "conectado": True,
+            "custo": "Gratuitas e sem chave (Pexels usa chave grátis opcional p/ B-roll)",
+        },
+        "automacao": {
+            "oficial": "n8n + RunPod/ComfyUI (Fábrica de Vídeos)",
+            "conectado": bool(cfg.get("N8N_WEBHOOK_URL")),
+            "custo": "n8n self-host grátis · RunPod serverless paga por segundo de GPU",
         },
     }
 
@@ -108,9 +120,12 @@ async def search(q: str = "tendências", platform: str = "all", period: str = "3
         except Exception:
             coleta_errors = ["timeout na coleta"]
 
-    # 3) Mescla: oficial > coleta > demo (dedupe por título+autor)
+    # 3) Mineração persistida (n8n agendado) + ingestão n8n
+    automatizados = pipeline.mined_for_query(q) + pipeline.ingested_for_query(q)
+
+    # 4) Mescla: oficial > coleta/n8n > demo (dedupe por título+autor)
     videos, seen = [], set()
-    for v in official + coletados + demo_set["videos"]:
+    for v in official + coletados + automatizados + demo_set["videos"]:
         key = (v["platform"], (v["title"] or "").lower()[:60],
                (v["author"] or "").lower())
         if key in seen:
@@ -129,6 +144,7 @@ async def search(q: str = "tendências", platform: str = "all", period: str = "3
         "source_breakdown": {
             "oficial": sum(1 for v in videos if v["source"] == "oficial"),
             "coleta": sum(1 for v in videos if v["source"] == "coleta"),
+            "n8n": sum(1 for v in videos if v["source"] == "n8n"),
             "demo": sum(1 for v in videos if v["source"] == "demo"),
         },
         "coleta_errors": coleta_errors,
@@ -146,9 +162,40 @@ async def products(q: Optional[str] = None, category: str = "", sort: str = "gmv
                    limit: int = 18):
     items = demo.demo_products(q, category, sort, min(limit, 40))
     total_gmv = sum(p["gmv"] for p in items)
-    return {"products": items, "total_gmv": total_gmv,
-            "categories": list(demo.NICHOS.keys()),
-            "note": "Estimativas baseadas em modelo público de GMV (views × conversão × ticket)."}
+    out = {"products": items, "total_gmv": total_gmv,
+           "categories": list(demo.NICHOS.keys()),
+           "note": "Estimativas baseadas em modelo público de GMV (views × conversão × ticket).",
+           "mercadolivre": [], "ml_signal": {}}
+    # Mercado Livre: dados REAIS de mercado BR — API pública oficial, sem chave
+    if q and scrapling_sources.coleta_enabled():
+        try:
+            ml = await asyncio.wait_for(
+                asyncio.to_thread(free_sources.mercadolivre_search, q, 12), timeout=25)
+            out["mercadolivre"] = ml
+            out["ml_signal"] = free_sources.mercadolivre_trend_signal(ml)
+        except Exception:
+            out["mercadolivre"] = []
+    return out
+
+
+# ------------------------------------------------------------ ideias de pauta
+@app.get("/api/ideas")
+async def ideas(q: str = "renda extra", subreddit: str = "Brasil"):
+    """Pauta viral: top do Reddit + autocomplete do Google (grátis, sem chave)."""
+    result = {"reddit": [], "sugestoes": [], "subreddit": subreddit}
+    if scrapling_sources.coleta_enabled():
+        try:
+            result["reddit"] = await asyncio.wait_for(
+                asyncio.to_thread(free_sources.reddit_trending, subreddit, 8),
+                timeout=25)
+        except Exception:
+            pass
+        try:
+            result["sugestoes"] = await asyncio.wait_for(
+                asyncio.to_thread(free_sources.google_suggest, q), timeout=15)
+        except Exception:
+            pass
+    return result
 
 
 @app.get("/api/products/{product_id}")
@@ -254,7 +301,18 @@ async def ai_titles(body: TitlesIn):
 
 @app.post("/api/ai/analyze")
 async def ai_analyze(body: AnalyzeIn):
-    return await ai_engine.analyze_video(body.subject)
+    analise = await ai_engine.analyze_video(body.subject)
+    # Enriquecimento com metadados REAIS do vídeo via oEmbed oficial (grátis)
+    if free_sources.looks_like_video_url(body.subject):
+        try:
+            real = await asyncio.wait_for(
+                asyncio.to_thread(free_sources.oembed_lookup, body.subject),
+                timeout=20)
+            if real:
+                analise["video_real"] = real
+        except Exception:
+            pass
+    return analise
 
 
 @app.post("/api/ai/narration")
@@ -262,6 +320,120 @@ async def ai_narration(body: NarrationIn):
     tone = body.tone if body.tone in {"suspense", "energetico", "documental",
                                       "jornalistico"} else "suspense"
     return ai_engine.prepare_narration(body.text, tone)
+
+
+# ------------------------------------------------------------ Fábrica de Vídeos (n8n + RunPod/ComfyUI)
+class JobIn(BaseModel):
+    product: str = Field(..., min_length=2, max_length=160)
+    prompt: str = Field("", max_length=2000)
+    style: str = "dark"
+    duration: int = 6
+
+
+class JobResultIn(BaseModel):
+    status: str = "pronto"          # pronto | erro | processando
+    video_url: str = ""
+    thumb_url: str = ""
+    cost_usd: Optional[float] = None
+    error: str = ""
+
+
+class IngestIn(BaseModel):
+    videos: list = []
+    query: str = ""
+
+
+class MiningRunIn(BaseModel):
+    keywords: list = []
+
+
+@app.post("/api/fabrica/jobs")
+async def fabrica_create(body: JobIn):
+    """Cria job de vídeo e dispara o webhook do n8n (que orquestra o ComfyUI)."""
+    job = pipeline.job_create(body.product, body.prompt, body.style,
+                              max(2, min(body.duration, 60)))
+    updated = await pipeline.dispatch_to_n8n(job)
+    return {"job": updated}
+
+
+@app.get("/api/fabrica/jobs")
+async def fabrica_list():
+    jobs = pipeline.jobs_list()
+    cfg = storage.settings_get()
+    return {"jobs": jobs,
+            "webhook_configurado": bool(cfg.get("N8N_WEBHOOK_URL"))}
+
+
+@app.post("/api/fabrica/jobs/{job_id}/result")
+async def fabrica_result(job_id: str, body: JobResultIn,
+                         x_pipeline_token: Optional[str] = Header(None)):
+    """Callback do n8n com o vídeo pronto (protegido por token opcional)."""
+    if not pipeline.check_token(x_pipeline_token or ""):
+        raise HTTPException(401, "Token inválido")
+    status = body.status if body.status in {"pronto", "erro", "processando"} else "pronto"
+    if body.video_url:
+        status = "pronto"
+    job = pipeline.job_update(job_id, {
+        "status": status,
+        "video_url": body.video_url or None,
+        "thumb_url": body.thumb_url or None,
+        "cost_usd": body.cost_usd,
+        "error": body.error or None,
+    })
+    if not job:
+        raise HTTPException(404, "Job não encontrado")
+    return {"ok": True, "job": job}
+
+
+@app.delete("/api/fabrica/jobs/{job_id}")
+async def fabrica_delete(job_id: str):
+    if not pipeline.job_delete(job_id):
+        raise HTTPException(404, "Job não encontrado")
+    return {"ok": True}
+
+
+@app.get("/api/fabrica/broll")
+async def fabrica_broll(q: str = "produto"):
+    """B-roll gratuito (Pexels) para enriquecer os vídeos da Fábrica."""
+    return await asyncio.to_thread(free_sources.pexels_broll, q, 10)
+
+
+# ------------------------------------------------------------ mineração & ingestão (n8n)
+@app.post("/api/mining/run")
+async def mining_run(body: MiningRunIn):
+    """Disparado pelo n8n (ou manualmente): minera palavras-chave com Scrapling
+    e persiste os resultados, que entram no Radar Viral automaticamente."""
+    kws = [k.strip() for k in (body.keywords or []) if k.strip()][:6]
+    if not kws:
+        raise HTTPException(400, "Informe ao menos uma palavra-chave")
+    if not scrapling_sources.coleta_enabled():
+        raise HTTPException(400, "Coleta Scrapling desativada")
+    results = []
+    for kw in kws:
+        try:
+            res = await asyncio.wait_for(
+                asyncio.to_thread(scrapling_sources.collect, kw,
+                                  ["youtube", "tiktok", "instagram"], 8),
+                timeout=70)
+            results.append(pipeline.mined_save(kw, res["videos"], res["errors"]))
+        except Exception as e:
+            results.append(pipeline.mined_save(kw, [], [f"timeout: {type(e).__name__}"]))
+    return {"ok": True, "results": results}
+
+
+@app.get("/api/mining/summary")
+async def mining_summary():
+    return {"cache": pipeline.mined_summary()}
+
+
+@app.post("/api/ingest/videos")
+async def ingest_videos(body: IngestIn,
+                        x_pipeline_token: Optional[str] = Header(None)):
+    """Qualquer workflow n8n pode empurrar vídeos minerados de outras fontes."""
+    if not pipeline.check_token(x_pipeline_token or ""):
+        raise HTTPException(401, "Token inválido")
+    n = pipeline.ingest_videos(body.videos or [], body.query or "n8n")
+    return {"ok": True, "importados": n}
 
 
 # ------------------------------------------------------------ biblioteca
@@ -318,6 +490,33 @@ async def test_service(service: str):
     if service == "coleta":
         return await asyncio.wait_for(
             asyncio.to_thread(scrapling_sources.health_check), timeout=60)
+    if service == "n8n":
+        cfg = storage.settings_get()
+        url = cfg.get("N8N_WEBHOOK_URL", "")
+        if not url:
+            return {"ok": False, "message": "Configure a URL do webhook do n8n primeiro."}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(url, json={"ping": True,
+                                                 "token": cfg.get("N8N_TOKEN", "")})
+            if r.status_code < 400:
+                return {"ok": True, "message": f"n8n respondeu ({r.status_code}) — conexão ok."}
+            return {"ok": False, "message": f"n8n respondeu com erro {r.status_code}."}
+        except Exception as e:
+            return {"ok": False, "message": f"Webhook inacessível: {type(e).__name__}"}
+    if service == "fontes":
+        testes = {}
+        for nome, fn, arg in [("mercadolivre", free_sources.mercadolivre_search, "garrafa térmica"),
+                              ("reddit", free_sources.reddit_trending, "Brasil"),
+                              ("google_suggest", free_sources.google_suggest, "como ganhar dinheiro")]:
+            try:
+                r = await asyncio.wait_for(asyncio.to_thread(fn, arg), timeout=20)
+                testes[nome] = {"ok": bool(r), "itens": len(r)}
+            except Exception as e:
+                testes[nome] = {"ok": False, "erro": type(e).__name__}
+        ok = sum(1 for t in testes.values() if t.get("ok"))
+        return {"ok": ok > 0, "message": f"{ok}/3 fontes gratuitas respondendo",
+                "detalhe": testes}
     if service == "instagram":
         return await providers.ig_token_test()
     if service == "tiktok":

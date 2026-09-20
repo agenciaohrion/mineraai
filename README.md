@@ -6,11 +6,24 @@ Plataforma completa que une três capacidades em um só produto:
 |---|---|
 | **ViralFindr** (pesquisa de conteúdo viral) | 🔎 **Radar Viral**: busca por palavra-chave em TikTok, Instagram e YouTube com viral score, filtros (período, ordenação, views mínimas), hashtags dominantes, sons em alta e criadores do tema |
 | **Kalodata** (analytics de TikTok Shop) | 📦 **Produtos**: ranking com GMV estimado, unidades, crescimento, curva 14 dias, comissões + 👤 **Criadores** + 🔴 **Vídeos & Lives** (live commerce) |
-| **DarkLab AI** (laboratório para canais dark) | ✨ **Estúdio IA**: hooks virais, roteiros UGC/dark cena a cena, legendas + hashtags, títulos SEO YouTube, 🧪 **Viral Lab** (engenharia reversa de vídeo viral com outlier score), 🎙️ **Voice Studio** (marcação de pausas/emoção + prévia de voz grátis) e 🧭 **Radar de Nichos** (micro-nichos antes da onda) |
+| **DarkLab AI** (laboratório para canais dark) | ✨ **Estúdio IA**: hooks virais, roteiros UGC/dark cena a cena, legendas + hashtags, títulos SEO YouTube, 🧪 **Viral Lab** (engenharia reversa com metadados reais via oEmbed), 🎙️ **Voice Studio** e 🧭 **Radar de Nichos** |
+| — (produção em escala) | 🎬 **Fábrica de Vídeos**: jobs de geração enviados ao **n8n → ComfyUI no RunPod serverless**, com entrega do MP4 dentro da plataforma (workflows prontos em `n8n/`) |
 
 Além disso: **Dashboard** com visão do dia + **termos em alta em tempo real
-(Google Trends BR)**, **Biblioteca** para salvar qualquer item (persistência
-local) e **APIs & Conexões** com gestão de chaves e teste de conexão.
+(Google Trends BR)**, **Fábrica de Vídeos 🎬** (produção automatizada via
+**n8n + RunPod/ComfyUI** — veja [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md)),
+**Biblioteca** persistente e **APIs & Conexões** com gestão de chaves e testes.
+
+### 🆓 Pacote de fontes gratuitas integradas (monumental, quase sem custo)
+
+- **Oficiais com chave grátis**: YouTube Data API v3, TikTok Research API,
+  Instagram Graph API
+- **Sem chave nenhuma**: Scrapling (coleta pública), Mercado Livre (produtos
+  reais BR com preço/vendas/reviews), Reddit JSON (pauta viral), Google
+  Suggest (demanda de busca), Google Trends RSS, oEmbed YouTube/TikTok
+- **Chave grátis opcional**: Pexels (B-roll), Groq/Gemini (LLMs do Estúdio)
+- **Produção de vídeo**: n8n (self-host grátis) + RunPod serverless
+  (centavos por vídeo) orquestrando ComfyUI — workflows importáveis em `n8n/`
 
 ### Fontes de dados em 3 camadas (cada item é rotulado)
 
@@ -100,14 +113,18 @@ prioridade e são mesclados automaticamente.
 
 ```
 server/
-  main.py              # FastAPI + rotas (/api/*) e servido do frontend
+  main.py              # FastAPI + rotas (/api/*) e frontend
   providers.py         # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
   scrapling_sources.py # Camada COLETA: Scrapling (YouTube/TikTok/IG + Google Trends)
+  free_sources.py      # Grátis sem chave: Mercado Livre, Reddit, Suggest, oEmbed, Pexels
+  pipeline.py          # Fábrica de Vídeos (jobs n8n/RunPod) + mineração/ingestão
   data.py              # Motor demo determinístico (semente por query/plataforma)
   ai_engine.py         # Estúdio IA: motor interno de copy + adaptadores Groq/Gemini/OpenAI
   storage.py           # Persistência JSON (biblioteca + configurações/chaves)
   tests_scrapling.py   # Testes offline dos parsers de coleta (fixtures locais)
-static/                # SPA em JS puro (sem build): dashboard, radar, produtos, studio…
+static/                # SPA em JS puro (sem build)
+n8n/                   # Workflows n8n importáveis (Fábrica + Mineração)
+docs/AUTOMACAO.md      # Guia RunPod + n8n ponta a ponta
 data/                  # Arquivos persistidos em runtime (gitignored)
 ```
 
