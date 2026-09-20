@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MineraAI — Ecossistema de Descoberta Viral & Criação</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛏️</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="shell">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="side">
+    <div class="brand">
+      <div class="gem">⛏️</div>
+      <div><b>MineraAI</b><small>descubra · analise · crie</small></div>
+    </div>
+
+    <div class="nav-group">
+      <h6>Visão geral</h6>
+      <nav class="nav">
+        <a href="#/dashboard" data-route="dashboard"><span class="ico">◈</span> Dashboard</a>
+      </nav>
+    </div>
+
+    <div class="nav-group">
+      <h6>Descoberta</h6>
+      <nav class="nav">
+        <a href="#/radar" data-route="radar"><span class="ico">🔎</span> Radar Viral</a>
+        <a href="#/produtos" data-route="produtos"><span class="ico">📦</span> Produtos</a>
+        <a href="#/criadores" data-route="criadores"><span class="ico">👤</span> Criadores</a>
+        <a href="#/lives" data-route="lives"><span class="ico">🔴</span> Vídeos & Lives</a>
+        <a href="#/nichos" data-route="nichos"><span class="ico">🧭</span> Radar de Nichos</a>
+      </nav>
+    </div>
+
+    <div class="nav-group">
+      <h6>Criação</h6>
+      <nav class="nav">
+        <a href="#/studio" data-route="studio"><span class="ico">✨</span> Estúdio IA</a>
+        <a href="#/fabrica" data-route="fabrica"><span class="ico">🎬</span> Fábrica de Vídeos</a>
+        <a href="#/biblioteca" data-route="biblioteca"><span class="ico">📁</span> Biblioteca</a>
+      </nav>
+    </div>
+
+    <div class="nav-group">
+      <h6>Sistema</h6>
+      <nav class="nav">
+        <a href="#/apis" data-route="apis"><span class="ico">🔌</span> APIs & Conexões</a>
+      </nav>
+    </div>
+
+    <div class="mode-pill" id="modePill">Carregando status…</div>
+  </aside>
+
+  <!-- ============ CONTEÚDO ============ -->
+  <main class="main" id="view"></main>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
