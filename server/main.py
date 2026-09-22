@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (ai_engine, data as demo, free_sources, pipeline, providers,
+from . import (ai_engine, curation, data as demo, free_sources, pipeline, providers,
                scrapling_sources, storage)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,7 +66,7 @@ def provider_status() -> dict:
             "custo": "Gratuitas e sem chave (Pexels usa chave grátis opcional p/ B-roll)",
         },
         "automacao": {
-            "oficial": "n8n + RunPod/ComfyUI (Fábrica de Vídeos)",
+            "oficial": "n8n + RunPod/ComfyUI (Fábrica ComfyUI)",
             "conectado": bool(cfg.get("N8N_WEBHOOK_URL")),
             "custo": "n8n self-host grátis · RunPod serverless paga por segundo de GPU",
         },
@@ -322,17 +322,22 @@ async def ai_narration(body: NarrationIn):
     return ai_engine.prepare_narration(body.text, tone)
 
 
-# ------------------------------------------------------------ Fábrica de Vídeos (n8n + RunPod/ComfyUI)
+# ------------------------------------------------------------ Fábrica (n8n + RunPod/ComfyUI) — imagem, vídeo ou misto
 class JobIn(BaseModel):
     product: str = Field(..., min_length=2, max_length=160)
-    prompt: str = Field("", max_length=2000)
-    style: str = "dark"
+    prompt: str = Field("", max_length=4000)  # prompt principal (pode ser roteiro completo)
+    style: str = "dark"  # dark, cinematic, ugc, produto, anime
     duration: int = 6
+    tipo: str = "video"  # imagem | video | misto
+    roteiro: dict = {}  # {hook, cenas: [{nome, descricao, prompt, duracao}], narracao}
+    prompts: list = []  # prompts extras para imagens
+    extra: dict = {}
 
 
 class JobResultIn(BaseModel):
     status: str = "pronto"          # pronto | erro | processando
     video_url: str = ""
+    images: list = []               # [{url, prompt, cena, thumb}]
     thumb_url: str = ""
     cost_usd: Optional[float] = None
     error: str = ""
@@ -349,9 +354,12 @@ class MiningRunIn(BaseModel):
 
 @app.post("/api/fabrica/jobs")
 async def fabrica_create(body: JobIn):
-    """Cria job de vídeo e dispara o webhook do n8n (que orquestra o ComfyUI)."""
+    """Cria job de imagem/vídeo/misto e dispara o webhook do n8n (que orquestra o ComfyUI no RunPod)."""
+    tipo = body.tipo if body.tipo in ("imagem", "video", "misto") else "video"
     job = pipeline.job_create(body.product, body.prompt, body.style,
-                              max(2, min(body.duration, 60)))
+                              max(2, min(body.duration, 60)),
+                              extra=body.extra, tipo=tipo,
+                              roteiro=body.roteiro, prompts=body.prompts)
     updated = await pipeline.dispatch_to_n8n(job)
     return {"job": updated}
 
@@ -367,15 +375,16 @@ async def fabrica_list():
 @app.post("/api/fabrica/jobs/{job_id}/result")
 async def fabrica_result(job_id: str, body: JobResultIn,
                          x_pipeline_token: Optional[str] = Header(None)):
-    """Callback do n8n com o vídeo pronto (protegido por token opcional)."""
+    """Callback do n8n com imagem/vídeo/misto pronto (protegido por token opcional)."""
     if not pipeline.check_token(x_pipeline_token or ""):
         raise HTTPException(401, "Token inválido")
     status = body.status if body.status in {"pronto", "erro", "processando"} else "pronto"
-    if body.video_url:
+    if body.video_url or body.images:
         status = "pronto"
     job = pipeline.job_update(job_id, {
         "status": status,
         "video_url": body.video_url or None,
+        "images": body.images or [],
         "thumb_url": body.thumb_url or None,
         "cost_usd": body.cost_usd,
         "error": body.error or None,
@@ -434,6 +443,241 @@ async def ingest_videos(body: IngestIn,
         raise HTTPException(401, "Token inválido")
     n = pipeline.ingest_videos(body.videos or [], body.query or "n8n")
     return {"ok": True, "importados": n}
+
+
+# ------------------------------------------------------------ curadoria
+class CurationDecideIn(BaseModel):
+    decision: str = Field(..., min_length=2)
+    notas: str = ""
+    por: str = "humano"
+
+class CurationBulkDecideIn(BaseModel):
+    ids: list[str] = []
+    decision: str = Field(..., min_length=2)
+    notas: str = ""
+
+class CurationEnrichIn(BaseModel):
+    hooks: list = []
+    analise: dict = {}
+    tags_sugeridas: list = []
+    titulo_sugerido: str = ""
+    notas_ia: str = ""
+    extra: dict = {}
+
+class CurationImportIn(BaseModel):
+    videos: list = []
+    query: str = ""
+    source: str = "manual"
+
+class CurationRulesIn(BaseModel):
+    rules: dict = {}
+
+class CurationAutoIn(BaseModel):
+    query: str = Field(..., min_length=2)
+    platform: str = "all"
+    limit: int = 12
+
+
+@app.get("/api/curation/queue")
+async def curation_queue(status: str = "", platform: str = "all", min_score: int = 0,
+                         q: str = "", limit: int = 50, sort: str = "score"):
+    items = curation.curation_list(status=status, platform=platform,
+                                   min_score=min_score, q=q, limit=limit, sort=sort)
+    stats = curation.curation_stats()
+    return {"items": items, "stats": stats, "rules": curation.rules_get()}
+
+
+@app.get("/api/curation/outliers")
+async def curation_outliers_endpoint(min_score: int = 75, limit: int = 20):
+    items = curation.curation_outliers(min_score=min_score, limit=limit)
+    return {"outliers": items, "count": len(items), "min_score": min_score}
+
+
+@app.get("/api/curation/stats")
+async def curation_stats_endpoint():
+    return curation.curation_stats()
+
+
+@app.get("/api/curation/rules")
+async def curation_rules_get():
+    return {"rules": curation.rules_get()}
+
+
+@app.post("/api/curation/rules")
+async def curation_rules_save(body: CurationRulesIn):
+    saved = curation.rules_save(body.rules or {})
+    return {"ok": True, "rules": saved}
+
+
+@app.post("/api/curation/items")
+async def curation_import(body: CurationImportIn,
+                          x_pipeline_token: Optional[str] = Header(None)):
+    """Importa vídeos para curadoria — usado pelo frontend, n8n e API."""
+    # se token configurado, exige para source n8n
+    if body.source in ("n8n", "auto") and not pipeline.check_token(x_pipeline_token or ""):
+        # permite se token não configurado
+        if storage.settings_get().get("N8N_TOKEN"):
+            raise HTTPException(401, "Token inválido")
+    if not body.videos:
+        raise HTTPException(400, "Nenhum vídeo enviado")
+    # normaliza
+    normalized = []
+    for v in body.videos:
+        try:
+            nv = providers.normalize_video(v, v.get("platform", "tiktok"))
+            normalized.append(nv)
+        except Exception:
+            continue
+    result = curation.curation_bulk_create(normalized, query_origem=body.query, source=body.source)
+    return {"ok": True, **result}
+
+
+@app.post("/api/curation/auto-curate")
+async def curation_auto_curate(body: CurationAutoIn):
+    """Busca no Radar e já joga para curadoria com regras aplicadas."""
+    # reutiliza a lógica de search (sem duplicar código pesado, faz chamada interna)
+    # aqui faz busca rápida via pipeline + demo
+    plats = ["tiktok", "instagram", "youtube"] if body.platform == "all" else [body.platform]
+    limit = max(3, min(body.limit, 20))
+
+    # tenta coleta real + demo (simplificado para não depender de gather)
+    videos = []
+    st = provider_status()
+    if st["coleta"]["conectado"]:
+        try:
+            res = await asyncio.wait_for(
+                asyncio.to_thread(scrapling_sources.collect, body.query, plats, limit),
+                timeout=45)
+            videos += res.get("videos", [])
+        except Exception:
+            pass
+    # completa com demo
+    demo_set = demo.search_aggregate(body.query, plats, "30d", 0, limit)
+    # dedupe
+    seen = set()
+    merged = []
+    for v in videos + demo_set["videos"]:
+        key = (v["platform"], v["id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(v)
+
+    result = curation.curation_bulk_create(merged[:limit * len(plats)],
+                                           query_origem=body.query, source="auto")
+    return {"ok": True, "query": body.query, **result}
+
+
+@app.post("/api/curation/items/{item_id}/decision")
+async def curation_decide_endpoint(item_id: str, body: CurationDecideIn):
+    if body.decision not in curation.VALID_DECISIONS:
+        raise HTTPException(400, f"Decisão inválida. Use: {', '.join(curation.STATUSES)}")
+    updated = curation.curation_decide(item_id, body.decision, body.notas, body.por)
+    if not updated:
+        raise HTTPException(404, "Item não encontrado")
+    # se aprovado e tem vídeo, opcionalmente já salva na biblioteca
+    if body.decision == "aprovado":
+        try:
+            v = updated.get("video", {})
+            storage.library_add({"kind": "video", "ref": v.get("id"),
+                                 "title": v.get("title"),
+                                 "payload": {"curadoria_id": item_id, **v}})
+        except Exception:
+            pass
+    return {"ok": True, "item": updated}
+
+
+@app.post("/api/curation/bulk-decision")
+async def curation_bulk_decide_endpoint(body: CurationBulkDecideIn):
+    if not body.ids:
+        raise HTTPException(400, "Nenhum ID enviado")
+    if body.decision not in curation.VALID_DECISIONS:
+        raise HTTPException(400, "Decisão inválida")
+    res = curation.curation_bulk_decide(body.ids, body.decision, body.notas)
+    # se aprovado em lote, salva todos na biblioteca
+    if body.decision == "aprovado":
+        try:
+            for iid in body.ids:
+                it = curation.curation_get(iid)
+                if it:
+                    v = it.get("video", {})
+                    storage.library_add({"kind": "video", "ref": v.get("id"),
+                                         "title": v.get("title"),
+                                         "payload": {"curadoria_id": iid, **v}})
+        except Exception:
+            pass
+    return res
+
+
+@app.post("/api/curation/items/{item_id}/enrich")
+async def curation_enrich_endpoint(item_id: str, body: CurationEnrichIn,
+                                   x_pipeline_token: Optional[str] = Header(None)):
+    # token opcional para n8n
+    if x_pipeline_token and not pipeline.check_token(x_pipeline_token):
+        if storage.settings_get().get("N8N_TOKEN"):
+            raise HTTPException(401, "Token inválido")
+    updated = curation.curation_enrich(item_id, {
+        "hooks": body.hooks,
+        "analise": body.analise,
+        "tags_sugeridas": body.tags_sugeridas,
+        "titulo_sugerido": body.titulo_sugerido,
+        "notas_ia": body.notas_ia,
+        "extra": body.extra,
+    })
+    if not updated:
+        raise HTTPException(404, "Item não encontrado")
+    return {"ok": True, "item": updated}
+
+
+@app.post("/api/curation/items/{item_id}/auto-enrich")
+async def curation_auto_enrich(item_id: str):
+    """Enriquece automaticamente com IA (hooks + análise Viral Lab)."""
+    it = curation.curation_get(item_id)
+    if not it:
+        raise HTTPException(404, "Item não encontrado")
+    video = it.get("video", {})
+    title = video.get("title", "")
+
+    # gera hooks e análise em paralelo
+    hooks_task = ai_engine.generate_hooks(title[:80] or video.get("author", "produto"),
+                                          niche="", audience="", tone="direto", count=5)
+    analyze_task = ai_engine.analyze_video(title)
+
+    hooks_res, analise_res = await asyncio.gather(hooks_task, analyze_task)
+
+    enrich = {
+        "hooks": hooks_res.get("hooks", [])[:5],
+        "analise": analise_res,
+        "tags_sugeridas": list(set((video.get("hashtags") or []) + ["#viral", "#curadoria"])),
+        "titulo_sugerido": f"{title[:60]} — análise curadoria",
+        "notas_ia": f"Outlier {analise_res.get('outlier_score', 0)} · {analise_res.get('veredito', '')}",
+        "extra": {"engine_hooks": hooks_res.get("engine"), "engine_analise": analise_res.get("engine")},
+    }
+    updated = curation.curation_enrich(item_id, enrich)
+    return {"ok": True, "item": updated, "enrich": enrich}
+
+
+@app.delete("/api/curation/items/{item_id}")
+async def curation_delete_endpoint(item_id: str):
+    if not curation.curation_delete(item_id):
+        raise HTTPException(404, "Item não encontrado")
+    return {"ok": True}
+
+
+@app.post("/api/curation/clear")
+async def curation_clear(status: str = ""):
+    """Limpa fila por status (ex: rejeitados)."""
+    from .storage import DATA_DIR, _read, _write, _lock
+    with _lock:
+        all_items = _read(curation.CURATION_FILE, [])
+        if status and status in curation.VALID_DECISIONS:
+            kept = [i for i in all_items if i.get("status") != status]
+            removed = len(all_items) - len(kept)
+        else:
+            kept = []
+            removed = len(all_items)
+        _write(curation.CURATION_FILE, kept)
+    return {"ok": True, "removidos": removed}
 
 
 # ------------------------------------------------------------ biblioteca
