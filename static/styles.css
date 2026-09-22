@@ -276,6 +276,15 @@ textarea { resize: vertical; min-height: 90px; }
 .link-gold { color: var(--gold); font-weight: 700; font-size: 13px; cursor: pointer; }
 .link-gold:hover { text-decoration: underline; }
 
+/* ---------- curadoria ---------- */
+.cura-card { border-left-width: 3px; }
+.cura-kanban { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.cura-status-col { background: var(--bg-soft); border: 1px dashed var(--line-soft); border-radius: 12px; padding: 12px; }
+.cura-status-col h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 10px; display: flex; justify-content: space-between; }
+.cura-badge-novo { background: var(--panel-2); color: var(--muted); }
+.cura-badge-aprovado { background: var(--green-soft); color: var(--green); }
+.cura-badge-rejeitado { background: var(--red-soft); color: var(--red); }
+
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   .side { position: relative; height: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }

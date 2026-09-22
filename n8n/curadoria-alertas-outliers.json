@@ -1,0 +1,118 @@
+{
+  "name": "MineraAI · Alertas Outliers (Telegram/Slack/Discord)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "minutes", "minutesInterval": 30 }]
+        }
+      },
+      "id": "c4000000-0000-4000-8000-000000000001",
+      "name": "A cada 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-400, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MINERAAI_URL }}/api/curation/outliers?min_score=75&limit=10",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c4000000-0000-4000-8000-000000000002",
+      "name": "MineraAI · Buscar Outliers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-180, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.count }}", "operator": { "type": "number", "operation": "gt" }, "rightValue": 0 }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c4000000-0000-4000-8000-000000000003",
+      "name": "Tem outliers?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [40, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formata alertas\nconst outliers = $input.first().json.outliers || [];\nconst top3 = outliers.slice(0,3);\n\nconst formatOne = (o) => {\n  const v = o.video;\n  return `🔥 ${v.title.slice(0,70)} | ${v.platform} | score ${o.curadoria.score_curadoria} | 👁 ${v.views} | ${v.handle || v.author} | ${v.url || ''}`;\n};\n\nconst telegramMsg = `🚨 MineraAI — ${outliers.length} OUTLIERS ≥75 detectados!\\n\\n` + top3.map(formatOne).join('\\n\\n') + `\\n\\n✅ Abra a Curadoria: ${$env.MINERAAI_URL}/#/curadoria`;\nconst slackBlocks = {\n  text: `🚨 ${outliers.length} outliers ≥75 na curadoria`,\n  blocks: [\n    { type: 'header', text: { type: 'plain_text', text: `🔥 ${outliers.length} outliers ≥75` } },\n    ...top3.map(o => ({ type: 'section', text: { type: 'mrkdwn', text: `*${o.video.title.slice(0,60)}*\\n${o.video.platform} · score ${o.curadoria.score_curadoria} · 👁 ${o.video.views} · ${o.video.handle}` } })),\n    { type: 'section', text: { type: 'mrkdwn', text: `<${$env.MINERAAI_URL}/#/curadoria|✅ Abrir Curadoria>` } }\n  ]\n};\n\nreturn [{ json: { count: outliers.length, telegramMsg, slackBlocks, outliers: top3.map(o => ({ id: o.id, title: o.video.title, score: o.curadoria.score_curadoria, platform: o.video.platform, views: o.video.views, url: o.video.url })) } }];"
+      },
+      "id": "c4000000-0000-4000-8000-000000000004",
+      "name": "Formatar Alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: $json.telegramMsg }) }}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "c4000000-0000-4000-8000-000000000005",
+      "name": "Telegram · Enviar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.slackBlocks) }}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "c4000000-0000-4000-8000-000000000006",
+      "name": "Slack · Enviar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ content: $json.telegramMsg }) }}",
+        "options": { "timeout": 20000 }
+      },
+      "id": "c4000000-0000-4000-8000-000000000007",
+      "name": "Discord · Enviar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 0]
+    }
+  ],
+  "connections": {
+    "A cada 30 min": { "main": [[{ "node": "MineraAI · Buscar Outliers", "type": "main", "index": 0 }]] },
+    "MineraAI · Buscar Outliers": { "main": [[{ "node": "Tem outliers?", "type": "main", "index": 0 }]] },
+    "Tem outliers?": { "main": [[{ "node": "Formatar Alerta", "type": "main", "index": 0 }], []] },
+    "Formatar Alerta": {
+      "main": [
+        [
+          { "node": "Telegram · Enviar", "type": "main", "index": 0 },
+          { "node": "Slack · Enviar", "type": "main", "index": 0 },
+          { "node": "Discord · Enviar", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "notes": "Configure no n8n: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL, MINERAAI_URL. Desative os nodes que não usar."
+}

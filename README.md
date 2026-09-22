@@ -8,10 +8,12 @@ Plataforma completa que une três capacidades em um só produto:
 | **Kalodata** (analytics de TikTok Shop) | 📦 **Produtos**: ranking com GMV estimado, unidades, crescimento, curva 14 dias, comissões + 👤 **Criadores** + 🔴 **Vídeos & Lives** (live commerce) |
 | **DarkLab AI** (laboratório para canais dark) | ✨ **Estúdio IA**: hooks virais, roteiros UGC/dark cena a cena, legendas + hashtags, títulos SEO YouTube, 🧪 **Viral Lab** (engenharia reversa com metadados reais via oEmbed), 🎙️ **Voice Studio** e 🧭 **Radar de Nichos** |
 | — (produção em escala) | 🎬 **Fábrica de Vídeos**: jobs de geração enviados ao **n8n → ComfyUI no RunPod serverless**, com entrega do MP4 dentro da plataforma (workflows prontos em `n8n/`) |
+| — (curadoria inteligente) | ✅ **Curadoria**: pipeline 5 etapas — coleta → filtragem automática (regras + blacklist) → enriquecimento IA (hooks + Viral Lab) → kanban humano (novo→aprovado) → biblioteca/fábrica/webhook. Workflows n8n: `curadoria-*.json` |
 
 Além disso: **Dashboard** com visão do dia + **termos em alta em tempo real
 (Google Trends BR)**, **Fábrica de Vídeos 🎬** (produção automatizada via
 **n8n + RunPod/ComfyUI** — veja [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md)),
+**Curadoria ✅** com regras configuráveis, outliers, bulk actions e 4 workflows n8n dedicados — veja [`docs/CURADORIA.md`](docs/CURADORIA.md),
 **Biblioteca** persistente e **APIs & Conexões** com gestão de chaves e testes.
 
 ### 🆓 Pacote de fontes gratuitas integradas (monumental, quase sem custo)
@@ -114,6 +116,7 @@ prioridade e são mesclados automaticamente.
 ```
 server/
   main.py              # FastAPI + rotas (/api/*) e frontend
+  curation.py          # Curadoria inteligente: regras, fila, enriquecimento, kanban
   providers.py         # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
   scrapling_sources.py # Camada COLETA: Scrapling (YouTube/TikTok/IG + Google Trends)
   free_sources.py      # Grátis sem chave: Mercado Livre, Reddit, Suggest, oEmbed, Pexels
@@ -122,10 +125,20 @@ server/
   ai_engine.py         # Estúdio IA: motor interno de copy + adaptadores Groq/Gemini/OpenAI
   storage.py           # Persistência JSON (biblioteca + configurações/chaves)
   tests_scrapling.py   # Testes offline dos parsers de coleta (fixtures locais)
-static/                # SPA em JS puro (sem build)
-n8n/                   # Workflows n8n importáveis (Fábrica + Mineração)
-docs/AUTOMACAO.md      # Guia RunPod + n8n ponta a ponta
+static/                # SPA em JS puro (sem build) — inclui viewCuradoria
+n8n/                   # Workflows n8n importáveis
+  fabrica-videos-comfyui-runpod.json
+  mineracao-automatica.json
+  curadoria-automatica.json          # garimpa keywords → curadoria a cada 1h
+  curadoria-enriquecimento-ia.json   # webhook: hooks + Viral Lab → salva
+  curadoria-publicacao.json          # aprovado → biblioteca/fábrica/webhook externo
+  curadoria-alertas-outliers.json    # outliers ≥75 → Telegram/Slack/Discord
+docs/
+  AUTOMACAO.md         # Guia RunPod + n8n ponta a ponta
+  CURADORIA.md         # Guia completo da curadoria + workflows
 data/                  # Arquivos persistidos em runtime (gitignored)
+  curation.json        # fila de curadoria (5000 itens)
+  curation_rules.json  # regras editáveis
 ```
 
 **Decisões-chave**
@@ -150,6 +163,20 @@ GET  /api/products?q=&category=&sort= | GET /api/products/{id}
 GET  /api/creators  GET /api/lives  GET /api/niches
 POST /api/ai/hooks | /api/ai/script | /api/ai/caption | /api/ai/titles
 POST /api/ai/analyze | /api/ai/narration
+
+# Curadoria ✅
+GET  /api/curation/queue?status=&platform=&min_score=&q=&sort=&limit=
+GET  /api/curation/outliers?min_score=75&limit=20
+GET  /api/curation/stats
+GET/POST /api/curation/rules
+POST /api/curation/items { videos: [], query: "", source: "manual|radar|n8n" }
+POST /api/curation/auto-curate { query, platform, limit }
+POST /api/curation/items/{id}/decision { decision, notas }
+POST /api/curation/bulk-decision { ids: [], decision }
+POST /api/curation/items/{id}/auto-enrich
+POST /api/curation/items/{id}/enrich
+DELETE /api/curation/items/{id}
+
 GET/POST/DELETE /api/library
 GET/POST /api/settings  ·  POST /api/settings/test/{youtube|tiktok|instagram|coleta}
 ```

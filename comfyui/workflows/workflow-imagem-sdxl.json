@@ -1,0 +1,60 @@
+{
+  "_comment": "MineraAI — SDXL Imagem Produto Vertical 9:16 — API Format para RunPod",
+  "3": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 768,
+      "height": 1344,
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "PROMPT_POSITIVO_AQUI — garrafa térmica premium na mesa de madeira, luz natural da janela, estilo UGC amador, foto iPhone, alta qualidade, 8k, detalhes, vertical 9:16",
+      "clip": ["3", 1]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "texto, marca d'água, baixa qualidade, borrado, deformado, extra fingers, cartoon, anime, logo, assinatura",
+      "clip": ["3", 1]
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 28,
+      "cfg": 7.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["3", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["4", 0]
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["8", 0],
+      "vae": ["3", 2]
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "mineraai/imagem",
+      "images": ["9", 0]
+    }
+  }
+}

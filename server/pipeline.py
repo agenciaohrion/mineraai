@@ -37,18 +37,24 @@ def job_get(job_id: str) -> Optional[dict]:
 
 
 def job_create(product: str, prompt: str, style: str, duration: int,
-               extra: dict | None = None) -> dict:
+               extra: dict | None = None, tipo: str = "video",
+               roteiro: dict | None = None, prompts: list | None = None) -> dict:
+    tipo = tipo if tipo in ("imagem", "video", "misto") else "video"
     job = {
         "id": f"job-{uuid.uuid4().hex[:10]}",
         "status": "fila",
+        "tipo": tipo,  # imagem | video | misto
         "product": product,
         "prompt": prompt,
         "style": style,
         "duration": duration,
+        "roteiro": roteiro or {},  # {hook, cenas: [{nome, descricao, prompt, duracao}], narracao}
+        "prompts": prompts or [],  # lista de prompts extras para imagens
         "extra": extra or {},
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "video_url": None,
+        "images": [],  # [{url, prompt, cena, thumb}]
         "thumb_url": None,
         "cost_usd": None,
         "error": None,
@@ -66,12 +72,16 @@ def job_update(job_id: str, patch: dict) -> Optional[dict]:
         job = next((j for j in jobs if j["id"] == job_id), None)
         if not job:
             return None
-        for k in ("status", "video_url", "thumb_url", "cost_usd", "error"):
+        for k in ("status", "video_url", "thumb_url", "cost_usd", "error", "images", "tipo", "roteiro", "prompts"):
             if k in patch:
                 job[k] = patch[k]
         job["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _write(JOBS_FILE, jobs)
         return dict(job)
+
+
+def job_update_tipo(job_id: str, tipo: str):
+    return job_update(job_id, {"tipo": tipo})
 
 
 def job_delete(job_id: str) -> bool:
@@ -95,10 +105,13 @@ async def dispatch_to_n8n(job: dict) -> dict:
     public_url = cfg.get("MINERAAI_PUBLIC_URL", "") or "http://localhost:8000"
     payload = {
         "job_id": job["id"],
+        "tipo": job.get("tipo", "video"),
         "product": job["product"],
         "prompt": job["prompt"],
         "style": job["style"],
         "duration": job["duration"],
+        "roteiro": job.get("roteiro", {}),
+        "prompts": job.get("prompts", []),
         "extra": job["extra"],
         "token": cfg.get("N8N_TOKEN", ""),
         "callback_url": f"{public_url.rstrip('/')}/api/fabrica/jobs/{job['id']}/result",

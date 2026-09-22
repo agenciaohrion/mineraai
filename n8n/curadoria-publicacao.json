@@ -1,0 +1,288 @@
+{
+  "name": "MineraAI · Curadoria Publicação (Aprovado → Biblioteca + Fábrica ComfyUI RunPod + Webhook)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mineraai-curadoria-aprovado",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000001",
+      "name": "Webhook · Item Aprovado",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 0],
+      "webhookId": "mineraai-curadoria-aprovado"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, item_id: $json.body.item_id || $json.body.id || $json.body.item?.id, message: 'Publicação iniciada — roteiro vai para ComfyUI RunPod se configurado' }) }}",
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000002",
+      "name": "Responder 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-480, -220]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Curadoria Aprovado → decide o que gerar no ComfyUI RunPod\n// Recebe do MineraAI: item com video + enriquecimento (hooks, analise, roteiro)\n// ============================================================\nconst body = $input.first().json.body || $input.first().json;\nconst item = body.item || body;\nconst videoOrig = item.video || item;\nconst enriquecimento = item.enriquecimento || {};\nconst roteiroCurado = item.roteiro || enriquecimento.roteiro || {};\n\n// CONFIGURAÇÃO — edite conforme seu fluxo\nconst config = {\n  salvar_biblioteca: true,\n  // O que gerar no ComfyUI RunPod quando aprova\n  gerar_conteudo: true,           // liga/desliga geração automática\n  tipo_conteudo: 'misto',         // 'imagem' | 'video' | 'misto' (imagem+video)\n  estilo: 'ugc',                  // ugc, dark, cinematic, produto, anime\n  duracao_video: 6,               // segundos\n  // Se false, só salva na biblioteca e não gera nada\n  // Se true e tipo=misto, gera kit: capa + 3 cenas + video curto\n  webhook_externo: '',            // ex: https://seu-scheduler.com/webhook para agendar post\n  usar_fabrica_mineraai: true,    // true = chama /api/fabrica/jobs (que já dispara RunPod), false = chama RunPod direto\n};\n\n// Monta roteiro final a partir do enriquecimento\nlet roteiroFinal = {\n  hook: enriquecimento.hooks?.[0]?.hook || enriquecimento.hooks?.[0] || roteiroCurado.hook || videoOrig.title || '',\n  cenas: [],\n  narracao: roteiroCurado.narracao || enriquecimento.titulo_sugerido || ''\n};\n\nif (roteiroCurado.cenas && roteiroCurado.cenas.length) {\n  roteiroFinal.cenas = roteiroCurado.cenas;\n} else if (enriquecimento.analise) {\n  // Cria cenas baseadas na análise Viral Lab\n  const formato = enriquecimento.analise.formato_detectado || 'UGC';\n  roteiroFinal.cenas = [\n    { nome: 'GANCHO', descricao: enriquecimento.hooks?.[0] || `Hook forte para ${videoOrig.title}`, prompt: `close-up reação, ${videoOrig.title}, estilo ${config.estilo}, 9:16 vertical, hook visual forte`, duracao: '2s' },\n    { nome: 'PROBLEMA', descricao: `Dor que o produto resolve`, prompt: `pessoa com problema cotidiano, antes do produto, ${config.estilo}, 9:16`, duracao: '1s' },\n    { nome: 'DEMO', descricao: `Demonstração real - formato ${formato}`, prompt: `${videoOrig.title}, demonstração uso real, prova social, ${config.estilo}, 9:16 vertical, alta qualidade`, duracao: '2s' },\n    { nome: 'CTA', descricao: `CTA final`, prompt: `${videoOrig.title} com CTA visual 'LINK NA BIO', produto destaque, ${config.estilo}, 9:16`, duracao: '1s' }\n  ];\n} else {\n  roteiroFinal.cenas = [\n    { nome: 'GANCHO', prompt: `close-up ${videoOrig.title}, hook visual, ${config.estilo}, 9:16`, duracao: '2s' },\n    { nome: 'DEMO', prompt: `${videoOrig.title} em uso, ${config.estilo}, 9:16 vertical`, duracao: '3s' },\n    { nome: 'CTA', prompt: `${videoOrig.title} CTA LINK NA BIO, ${config.estilo}, 9:16`, duracao: '1s' }\n  ];\n}\n\n// Prompts de imagem por cena\nconst promptsImagem = roteiroFinal.cenas.map(c => `${c.prompt || c.descricao}, ${videoOrig.title}, ${config.estilo}, vertical 9:16, alta qualidade`.slice(0,1200));\nconst promptVideo = `${config.estilo} video UGC ${videoOrig.title}, ${roteiroFinal.hook}, ${roteiroFinal.cenas.map(c => c.descricao).join('. ')}, vertical 9:16, movimento suave, ${config.duracao_video}s`.slice(0,1500);\n\n// Prompt fábrica (para /api/fabrica/jobs)\nlet promptFabrica = '';\nif (enriquecimento.hooks && enriquecimento.hooks.length) {\n  const hookTxt = typeof enriquecimento.hooks[0] === 'string' ? enriquecimento.hooks[0] : enriquecimento.hooks[0].hook || '';\n  promptFabrica = `Hook: ${hookTxt}. Produto: ${videoOrig.title}. Formato: ${enriquecimento.analise?.formato_detectado || 'UGC'}. Hashtags: ${(videoOrig.hashtags||[]).join(' ')}. Estilo ${config.estilo}. Roteiro: ${roteiroFinal.cenas.map(c => c.nome+': '+c.descricao).join(' | ')}`;\n} else {\n  promptFabrica = `${videoOrig.title}, estilo ${config.estilo}, vertical 9:16, alta qualidade. Roteiro: ${roteiroFinal.cenas.map(c => c.descricao).join('. ')}`;\n}\n\nreturn [{ json: { item_id: item.id || videoOrig.id, video: videoOrig, enriquecimento, roteiro: roteiroFinal, promptsImagem, promptVideo, promptFabrica, config, token: $env.N8N_TOKEN || body.token || '' } }];"
+      },
+      "id": "c3000000-0000-4000-8000-000000000003",
+      "name": "Config + Roteiro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 60]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.config.salvar_biblioteca }}", "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000004",
+      "name": "Salvar Biblioteca?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-260, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/library",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ kind: 'video', ref: $json.video.id, title: $json.video.title, payload: { curadoria_id: $json.item_id, video: $json.video, enriquecimento: $json.enriquecimento, roteiro: $json.roteiro, publicado_via: 'curadoria-n8n' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000005",
+      "name": "MineraAI · Biblioteca",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-40, -40]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.config.gerar_conteudo }}", "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000006",
+      "name": "Gerar no ComfyUI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-40, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.config.usar_fabrica_mineraai }}", "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000007",
+      "name": "Via Fábrica MineraAI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [180, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/fabrica/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ product: $json.video.title, prompt: $json.promptFabrica, style: $json.config.estilo, duration: $json.config.duracao_video, tipo: $json.config.tipo_conteudo, roteiro: $json.roteiro, prompts: $json.promptsImagem }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000008",
+      "name": "MineraAI · Fábrica (tipo misto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta workflow ComfyUI DIRETO no RunPod (sem passar pela Fábrica)\n// Usa tipo_conteudo para escolher workflow: imagem, video ou misto\nconst data = $input.first().json;\nconst jobId = data.item_id;\nconst tipo = data.config.tipo_conteudo || 'misto';\nconst promptsImagem = data.promptsImagem || [];\nconst promptVideo = data.promptVideo || '';\nconst cenas = data.roteiro.cenas || [];\nconst seedBase = Math.floor(Math.random()*1e12);\n\nlet workflow = {};\nworkflow['1'] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' } };\nworkflow['2'] = { class_type: 'EmptyLatentImage', inputs: { width: 768, height: 1344, batch_size: 1 } };\nworkflow['7'] = { class_type: 'CLIPTextEncode', inputs: { text: \"low quality, blurry, watermark, logo, text, deformed\", clip: ['1',1] } };\n\nif (tipo === 'imagem' || tipo === 'misto') {\n  promptsImagem.forEach((p, idx) => {\n    const base = 10 + idx*10;\n    workflow[`${base}`] = { class_type: 'CLIPTextEncode', inputs: { text: p, clip: ['1',1] } };\n    workflow[`${base+1}`] = { class_type: 'KSampler', inputs: { seed: seedBase+idx, steps: 28, cfg: 7.5, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['1',0], positive: [`${base}`,0], negative: ['7',0], latent_image: ['2',0] } };\n    workflow[`${base+2}`] = { class_type: 'VAEDecode', inputs: { samples: [`${base+1}`,0], vae: ['1',2] } };\n    workflow[`${base+3}`] = { class_type: 'SaveImage', inputs: { filename_prefix: `mineraai/curadoria_${jobId}_${cenas[idx]?.nome || idx}`, images: [`${base+2}`,0] } };\n  });\n}\n\nif (tipo === 'video' || tipo === 'misto') {\n  workflow['40'] = { class_type: 'ADE_LoadAnimateDiffModel', inputs: { model_name: 'mm_sd_v15_v2.ckpt' } };\n  workflow['41'] = { class_type: 'ADE_AnimateDiffLoaderWithContext', inputs: { model: ['1',0], motion_model: ['40',0] } };\n  workflow['42'] = { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 768, batch_size: 16 } };\n  workflow['90'] = { class_type: 'CLIPTextEncode', inputs: { text: promptVideo, clip: ['1',1] } };\n  workflow['91'] = { class_type: 'KSampler', inputs: { seed: seedBase+100, steps: 25, cfg: 7.0, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['41',0], positive: ['90',0], negative: ['7',0], latent_image: ['42',0] } };\n  workflow['92'] = { class_type: 'VAEDecode', inputs: { samples: ['91',0], vae: ['1',2] } };\n  workflow['93'] = { class_type: 'VHS_VideoCombine', inputs: { images: ['92',0], frame_rate: 8, loop_count: 0, filename_prefix: `mineraai/curadoria_${jobId}_video`, format: 'video/h264-mp4', pix_fmt: 'yuv420p', crf: 19 } };\n}\n\nreturn [{ json: { item_id: jobId, callback_url: `${$env.MINERAAI_URL}/api/curation/items/${jobId}/decision`, token: data.token, input: { workflow }, tipo, promptsImagem, video: data.video, enriquecimento: data.enriquecimento, roteiro: data.roteiro, webhook_externo: data.config.webhook_externo } }];"
+      },
+      "id": "c3000000-0000-4000-8000-000000000009",
+      "name": "Montar ComfyUI Direto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: $json.input }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000010",
+      "name": "RunPod · Gerar Curadoria",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 260],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "c3000000-0000-4000-8000-000000000011",
+      "name": "Aguardar Curadoria",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [840, 260]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/status/{{ $json.id || $('RunPod · Gerar Curadoria').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000012",
+      "name": "RunPod · Status Curadoria",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 260],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.status }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "COMPLETED" }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000013",
+      "name": "Curadoria Render?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1280, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai resultado misto da curadoria direta\nconst r = $input.first().json;\nconst out = r.output || {};\nlet video_url = '';\nlet images = [];\nconst job = $('Montar ComfyUI Direto').first().json;\n\nif (typeof out === 'object' && !Array.isArray(out)) {\n  video_url = out.video_url || out.video || '';\n  if (out.images) images = out.images.map((img, idx) => typeof img === 'string' ? { url: img, cena: job.promptsImagem[idx] || '' } : { url: img.url || '', cena: img.cena || '' });\n  if (!video_url) {\n    const s = JSON.stringify(out);\n    const vM = s.match(/https?:\\/\\/[^\"\\s]+\\.mp4[^\"\\s]*/);\n    if (vM) video_url = vM[0];\n  }\n  if (!images.length) {\n    const s = JSON.stringify(out);\n    const iM = s.match(/https?:\\/\\/[^\"\\s]+\\.(png|jpg|jpeg|webp)[^\"\\s]*/g);\n    if (iM) images = iM.map((u, idx) => ({ url: u, prompt: job.promptsImagem[idx] || '' }));\n  }\n}\n\nreturn [{ json: { item_id: job.item_id, video_url, images, tipo: job.tipo, video: job.video, enriquecimento: job.enriquecimento, roteiro: job.roteiro, webhook_externo: job.webhook_externo, token: job.token, cost_usd: r.cost || null } }];"
+      },
+      "id": "c3000000-0000-4000-8000-000000000014",
+      "name": "Extrair Resultado Curadoria",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/library",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ kind: 'video', ref: $json.video.id + '_gerado', title: $json.video.title + ' (gerado)', payload: { curadoria_id: $json.item_id, video_original: $json.video, roteiro: $json.roteiro, gerado: { video_url: $json.video_url, images: $json.images, tipo: $json.tipo }, publicado_via: 'curadoria-comfyui-direto' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000015",
+      "name": "Salvar Gerado Biblioteca",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1720, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.webhook_externo }}", "operator": { "type": "string", "operation": "isNotEmpty" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c3000000-0000-4000-8000-000000000016",
+      "name": "Webhook Externo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1720, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.webhook_externo }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ event: 'curadoria_conteudo_gerado', item_id: $json.item_id, tipo: $json.tipo, video_original: $json.video, roteiro: $json.roteiro, gerado: { video_url: $json.video_url, images: $json.images }, timestamp: new Date().toISOString() }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000017",
+      "name": "Enviar Webhook Externo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1940, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/curation/items/{{ $json.item_id }}/decision",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ decision: 'publicado', notas: 'Conteúdo gerado no ComfyUI RunPod (' + $json.tipo + ')', por: 'n8n-comfyui' }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c3000000-0000-4000-8000-000000000018",
+      "name": "Marcar Publicado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2160, 0]
+    }
+  ],
+  "connections": {
+    "Webhook · Item Aprovado": { "main": [[{ "node": "Responder 202", "type": "main", "index": 0 }, { "node": "Config + Roteiro", "type": "main", "index": 0 }]] },
+    "Config + Roteiro": { "main": [[{ "node": "Salvar Biblioteca?", "type": "main", "index": 0 }]] },
+    "Salvar Biblioteca?": { "main": [[{ "node": "MineraAI · Biblioteca", "type": "main", "index": 0 }], [{ "node": "MineraAI · Biblioteca", "type": "main", "index": 0 }]] },
+    "MineraAI · Biblioteca": { "main": [[{ "node": "Gerar no ComfyUI?", "type": "main", "index": 0 }]] },
+    "Gerar no ComfyUI?": { "main": [[{ "node": "Via Fábrica MineraAI?", "type": "main", "index": 0 }], [{ "node": "Webhook Externo?", "type": "main", "index": 0 }]] },
+    "Via Fábrica MineraAI?": { "main": [[{ "node": "MineraAI · Fábrica (tipo misto)", "type": "main", "index": 0 }], [{ "node": "Montar ComfyUI Direto", "type": "main", "index": 0 }]] },
+    "MineraAI · Fábrica (tipo misto)": { "main": [[{ "node": "Webhook Externo?", "type": "main", "index": 0 }]] },
+    "Montar ComfyUI Direto": { "main": [[{ "node": "RunPod · Gerar Curadoria", "type": "main", "index": 0 }]] },
+    "RunPod · Gerar Curadoria": { "main": [[{ "node": "Aguardar Curadoria", "type": "main", "index": 0 }]] },
+    "Aguardar Curadoria": { "main": [[{ "node": "RunPod · Status Curadoria", "type": "main", "index": 0 }]] },
+    "RunPod · Status Curadoria": { "main": [[{ "node": "Curadoria Render?", "type": "main", "index": 0 }]] },
+    "Curadoria Render?": { "main": [[{ "node": "Extrair Resultado Curadoria", "type": "main", "index": 0 }], [{ "node": "Aguardar Curadoria", "type": "main", "index": 0 }]] },
+    "Extrair Resultado Curadoria": { "main": [[{ "node": "Salvar Gerado Biblioteca", "type": "main", "index": 0 }]] },
+    "Salvar Gerado Biblioteca": { "main": [[{ "node": "Webhook Externo?", "type": "main", "index": 0 }]] },
+    "Webhook Externo?": { "main": [[{ "node": "Enviar Webhook Externo", "type": "main", "index": 0 }], [{ "node": "Marcar Publicado", "type": "main", "index": 0 }]] },
+    "Enviar Webhook Externo": { "main": [[{ "node": "Marcar Publicado", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

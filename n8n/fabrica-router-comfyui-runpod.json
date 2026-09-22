@@ -1,0 +1,130 @@
+{
+  "name": "MineraAI · Fábrica Router (Imagem/Vídeo/Misto) → ComfyUI RunPod",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mineraai-fabrica-job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000001",
+      "name": "MineraAI · Fábrica Router",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 0],
+      "webhookId": "mineraai-fabrica-job"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, job_id: $json.body.job_id, tipo: $json.body.tipo || 'video', message: 'Job recebido no router — roteando para ComfyUI ' + ($json.body.tipo || 'video') }) }}",
+        "options": {}
+      },
+      "id": "e1000000-0000-4000-8000-000000000002",
+      "name": "Responder Router 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-380, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Router baseado no tipo\nconst job = $input.first().json.body || $input.first().json;\nconst tipo = (job.tipo || 'video').toLowerCase();\n// Normaliza tipo\nlet tipoNorm = 'video';\nif (['imagem','image','img','foto'].includes(tipo)) tipoNorm = 'imagem';\nelse if (['misto','both','mix','image+video','imagem+video'].includes(tipo)) tipoNorm = 'misto';\nelse tipoNorm = 'video';\n\nreturn [{ json: { ...job, tipo: tipoNorm, _router: tipoNorm } }];"
+      },
+      "id": "e1000000-0000-4000-8000-000000000003",
+      "name": "Detectar Tipo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-380, 60]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "value": "imagem", "outputKey": "imagem" },
+            { "value": "video", "outputKey": "video" },
+            { "value": "misto", "outputKey": "misto" }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "allMatchingOutputs": false }
+      },
+      "id": "e1000000-0000-4000-8000-000000000004",
+      "name": "Switch Tipo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-160, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/webhook/mineraai-imagem-job",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "e1000000-0000-4000-8000-000000000005",
+      "name": "Chamar Fábrica Imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/webhook/mineraai-video-job",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "e1000000-0000-4000-8000-000000000006",
+      "name": "Chamar Fábrica Vídeo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:5678/webhook/mineraai-misto-job",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "e1000000-0000-4000-8000-000000000007",
+      "name": "Chamar Fábrica Mista",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [60, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ok: true, routed: $input.first().json.tipo || 'video', message: 'Job roteado com sucesso' } }];"
+      },
+      "id": "e1000000-0000-4000-8000-000000000008",
+      "name": "Fim Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 60]
+    }
+  ],
+  "connections": {
+    "MineraAI · Fábrica Router": { "main": [[{ "node": "Responder Router 202", "type": "main", "index": 0 }, { "node": "Detectar Tipo", "type": "main", "index": 0 }]] },
+    "Detectar Tipo": { "main": [[{ "node": "Switch Tipo", "type": "main", "index": 0 }]] },
+    "Switch Tipo": {
+      "main": [
+        [{ "node": "Chamar Fábrica Imagem", "type": "main", "index": 0 }],
+        [{ "node": "Chamar Fábrica Vídeo", "type": "main", "index": 0 }],
+        [{ "node": "Chamar Fábrica Mista", "type": "main", "index": 0 }]
+      ]
+    },
+    "Chamar Fábrica Imagem": { "main": [[{ "node": "Fim Router", "type": "main", "index": 0 }]] },
+    "Chamar Fábrica Vídeo": { "main": [[{ "node": "Fim Router", "type": "main", "index": 0 }]] },
+    "Chamar Fábrica Mista": { "main": [[{ "node": "Fim Router", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "notes": "Este workflow é o roteador principal. Configure MINERAAI_URL para usar webhook externo ou localhost se n8n self-host. Os 3 workflows de fábrica (imagem, video, misto) devem estar ativos."
+}

@@ -1,0 +1,118 @@
+{
+  "name": "MineraAI · Curadoria Enriquecimento IA (Hooks + Viral Lab)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mineraai-curadoria-enrich",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c2000000-0000-4000-8000-000000000001",
+      "name": "Webhook · Item para enriquecer",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-500, 0],
+      "webhookId": "mineraai-curadoria-enrich"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, item_id: $json.body.item_id || $json.body.id, message: 'Enriquecimento iniciado' }) }}",
+        "options": {}
+      },
+      "id": "c2000000-0000-4000-8000-000000000002",
+      "name": "Responder 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-280, -160]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai dados do item\nconst body = $input.first().json.body || $input.first().json;\nconst item_id = body.item_id || body.id;\nconst video = body.video || body;\nconst title = video.title || video.query || 'produto viral';\nconst platform = video.platform || 'tiktok';\n\n// Prompts para LLM externo (Groq/Gemini/OpenAI) ou interno MineraAI\nconst hooksPrompt = `Você é um copywriter viral BR. Produto/tema: \"${title}\" (${platform}). Gere 5 hooks curtos (máx 12 palavras) para vídeos curtos, um por linha, sem numeração.`;\nconst labPrompt = `Analise este vídeo para replicação viral: \"${title}\". Responda em JSON com chaves: formato_detectado, hook_detectado, hipoteses_virais (array 3 itens), plano_replicacao (array 3 itens). PT-BR.`;\n\nreturn [{ json: { item_id, video, title, platform, hooksPrompt, labPrompt, callback_url: `${$env.MINERAAI_URL}/api/curation/items/${item_id}/enrich`, token: $env.N8N_TOKEN || body.token || '' } }];"
+      },
+      "id": "c2000000-0000-4000-8000-000000000003",
+      "name": "Preparar Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/ai/hooks",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ product: $json.title, niche: '', tone: 'direto', count: 5 }) }}",
+        "options": { "timeout": 45000 }
+      },
+      "id": "c2000000-0000-4000-8000-000000000004",
+      "name": "MineraAI · Gerar Hooks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/ai/analyze",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ subject: $('Preparar Prompts').first().json.title }) }}",
+        "options": { "timeout": 45000 }
+      },
+      "id": "c2000000-0000-4000-8000-000000000005",
+      "name": "MineraAI · Viral Lab",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [160, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mescla resultados de hooks + lab\nconst prep = $('Preparar Prompts').first().json;\nconst hooksData = $('MineraAI · Gerar Hooks').first().json;\nconst labData = $input.first().json;\n\nconst hooks = (hooksData.hooks || []).map(h => typeof h === 'string' ? h : h.hook).slice(0,5);\nconst analise = labData;\n\nconst enrich = {\n  hooks,\n  analise,\n  tags_sugeridas: [...(prep.video.hashtags || []), '#viral', '#curadoria', `#${prep.platform}`].slice(0,8),\n  titulo_sugerido: `${prep.title.slice(0,60)} — versão curada`,\n  notas_ia: `Outlier ${analise.outlier_score || '?'} · ${analise.veredito || ''} · Formato: ${analise.formato_detectado || ''}`,\n  extra: { enriched_by: 'n8n', engine_hooks: hooksData.engine, engine_lab: labData.engine }\n};\n\nreturn [{ json: { item_id: prep.item_id, callback_url: prep.callback_url, token: prep.token, enrich } }];"
+      },
+      "id": "c2000000-0000-4000-8000-000000000006",
+      "name": "Mesclar Enriquecimento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Pipeline-Token", "value": "={{ $json.token }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.enrich) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "c2000000-0000-4000-8000-000000000007",
+      "name": "MineraAI · Salvar Enriquecimento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Opcional: gerar legenda + título SEO automaticamente\nconst prep = $('Preparar Prompts').first().json;\nconst enrich = $('Mesclar Enriquecimento').first().json.enrich;\nreturn [{ json: { item_id: prep.item_id, title: prep.title, hooks: enrich.hooks, analise: enrich.analise } }];"
+      },
+      "id": "c2000000-0000-4000-8000-000000000008",
+      "name": "Extra · Próximos passos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, -80]
+    }
+  ],
+  "connections": {
+    "Webhook · Item para enriquecer": { "main": [[{ "node": "Responder 202", "type": "main", "index": 0 }, { "node": "Preparar Prompts", "type": "main", "index": 0 }]] },
+    "Preparar Prompts": { "main": [[{ "node": "MineraAI · Gerar Hooks", "type": "main", "index": 0 }]] },
+    "MineraAI · Gerar Hooks": { "main": [[{ "node": "MineraAI · Viral Lab", "type": "main", "index": 0 }]] },
+    "MineraAI · Viral Lab": { "main": [[{ "node": "Mesclar Enriquecimento", "type": "main", "index": 0 }]] },
+    "Mesclar Enriquecimento": { "main": [[{ "node": "MineraAI · Salvar Enriquecimento", "type": "main", "index": 0 }]] },
+    "MineraAI · Salvar Enriquecimento": { "main": [[{ "node": "Extra · Próximos passos", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

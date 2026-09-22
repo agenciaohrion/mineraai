@@ -1,5 +1,5 @@
 {
-  "name": "MineraAI · Fábrica de Vídeos (ComfyUI + RunPod)",
+  "name": "MineraAI · Fábrica de Vídeos (ComfyUI + RunPod) — recebe roteiros",
   "nodes": [
     {
       "parameters": {
@@ -9,38 +9,38 @@
         "options": {}
       },
       "id": "a1000000-0000-4000-8000-000000000001",
-      "name": "MineraAI · Novo Job",
+      "name": "MineraAI · Novo Job Vídeo",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-380, 0],
+      "position": [-600, 0],
       "webhookId": "mineraai-video-job"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ ok: true, job_id: $json.body.job_id, message: 'Job recebido — produção iniciada' }) }}",
+        "responseBody": "={{ JSON.stringify({ ok: true, job_id: $json.body.job_id, tipo: $json.body.tipo || 'video', message: 'Job de vídeo recebido — produção iniciada no ComfyUI RunPod' }) }}",
         "options": {}
       },
       "id": "a1000000-0000-4000-8000-000000000002",
       "name": "Responder MineraAI (202)",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [-160, -180]
+      "position": [-380, -180]
     },
     {
       "parameters": {
-        "jsCode": "// ============================================================\n// Monta o payload para o ComfyUI no RunPod.\n// IMPORTANTE: substitua o objeto `workflow` abaixo pelo SEU\n// workflow exportado do ComfyUI (menu > Save (API Format)).\n// O exemplo gera imagens; para vídeo use AnimateDiff/SVD/Veo\n// no seu workflow e mantenha os mesmos pontos de injeção.\n// ============================================================\nconst job = $input.first().json.body;\n\nconst prompt = [\n  job.prompt || '',\n  `Produto: ${job.product}`,\n  `Estilo: ${job.style}, duração alvo ${job.duration}s`,\n  'vertical 9:16, alta qualidade, iluminação cinematográfica'\n].filter(Boolean).join(', ');\n\n// >>> COLE AQUI o seu workflow ComfyUI (formato API) <<<\nconst workflow = {\n  '3': { class_type: 'KSampler', inputs: { seed: Math.floor(Math.random()*1e15), steps: 20, cfg: 7, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['4',0], positive: ['6',0], negative: ['7',0], latent_image: ['5',0] } },\n  '4': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'SEU_MODELO.safetensors' } },\n  '5': { class_type: 'EmptyLatentImage', inputs: { width: 768, height: 1344, batch_size: 1 } },\n  '6': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['4',1] } },\n  '7': { class_type: 'CLIPTextEncode', inputs: { text: 'texto, marca d\\'água, baixa qualidade, borrado', clip: ['4',1] } },\n  '8': { class_type: 'VAEDecode', inputs: { samples: ['3',0], vae: ['4',2] } },\n  '9': { class_type: 'SaveImage', inputs: { filename_prefix: `mineraai/${job.job_id}`, images: ['8',0] } }\n};\n\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, input: { workflow } } }];"
+        "jsCode": "// ============================================================\n// MineraAI → ComfyUI RunPod — FÁBRICA DE VÍDEOS\n// Recebe roteiro completo do Estúdio IA ou Curadoria e monta workflow\n// ============================================================\nconst job = $input.first().json.body || $input.first().json;\n\nconst tipo = job.tipo || 'video';\nconst product = job.product || 'produto';\nconst style = job.style || 'ugc';\nconst duration = job.duration || 6;\nconst roteiro = job.roteiro || {};\nconst extraPrompts = job.prompts || [];\n\n// Estilos mapeados para prefixos de prompt\nconst STYLE_PREFIX = {\n  ugc: 'foto amadora estilo UGC, luz natural, mão tremendo levemente, iPhone photo, casa real, autêntico, ', \n  dark: 'dark aesthetic, moody lighting, cinematic shadows, misterioso, suspense, ', \n  cinematic: 'cinematic lighting, 8k, ultra detailed, professional color grading, dramatic, ', \n  produto: 'product photography, studio lighting, clean background, commercial, high detail, ',\n  anime: 'anime style, studio ghibli, vibrant colors, detailed illustration, '\n};\nconst prefix = STYLE_PREFIX[style] || STYLE_PREFIX.ugc;\n\n// Monta prompt principal\nlet promptBase = job.prompt || '';\nif (roteiro.hook) promptBase = `${roteiro.hook}. ${promptBase}`;\nif (roteiro.narracao) promptBase = `${promptBase}. Narração: ${roteiro.narracao.slice(0,200)}`;\n\nconst promptPositivo = [\n  prefix,\n  `Produto: ${product}`,\n  promptBase,\n  `Estilo: ${style}, duração ${duration}s`,\n  'vertical 9:16, alta qualidade, iluminação cinematográfica, movimento suave',\n  extraPrompts.join(', ')\n].filter(Boolean).join(', ');\n\n// Se tem cenas no roteiro, extrai prompts por cena\nlet cenas = roteiro.cenas || [];\nif (!cenas.length && roteiro.cenas === undefined) {\n  // fallback: cria cenas genéricas a partir do prompt\n  cenas = [\n    { nome: 'GANCHO', prompt: `${prefix} close-up reação surpresa, ${product} desfocado fundo, hook visual forte, 9:16`, duracao: '2s' },\n    { nome: 'DEMO', prompt: `${prefix} ${product} em uso real, demonstração, cozinha real, ${promptBase}, 9:16`, duracao: '3s' },\n    { nome: 'CTA', prompt: `${prefix} ${product} com CTA visual, texto 'LINK NA BIO', produto destaque, 9:16`, duracao: '1s' }\n  ];\n}\n\n// Workflow ComfyUI AnimateDiff para vídeo — API Format\n// >>> SUBSTITUA ckpt_name e motion model pelos seus no RunPod <<<\nconst seed = Math.floor(Math.random()*1e15);\nconst workflow = {\n  '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'realisticVisionV60B1_v51HyperVAE.safetensors' } },\n  '2': { class_type: 'ADE_LoadAnimateDiffModel', inputs: { model_name: 'mm_sd_v15_v2.ckpt' } },\n  '3': { class_type: 'ADE_AnimateDiffLoaderWithContext', inputs: { model: ['1',0], motion_model: ['2',0], beta_schedule: 'sqrt_linear (AnimateDiff)', context_length: 16, context_stride: 1, context_overlap: 4, context_schedule: 'uniform', closed_loop: false } },\n  '4': { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 768, batch_size: 16 } },\n  '6': { class_type: 'CLIPTextEncode', inputs: { text: promptPositivo.slice(0,1500), clip: ['1',1] } },\n  '7': { class_type: 'CLIPTextEncode', inputs: { text: \"low quality, blurry, texto, marca d'água, baixa qualidade, borrado, deformado, extra fingers, static, no movement, logo\", clip: ['1',1] } },\n  '8': { class_type: 'KSampler', inputs: { seed, steps: 25, cfg: 7.0, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['3',0], positive: ['6',0], negative: ['7',0], latent_image: ['4',0] } },\n  '9': { class_type: 'VAEDecode', inputs: { samples: ['8',0], vae: ['1',2] } },\n  '10': { class_type: 'VHS_VideoCombine', inputs: { images: ['9',0], frame_rate: 8, loop_count: 0, filename_prefix: `mineraai/video_${job.job_id}`, format: 'video/h264-mp4', pix_fmt: 'yuv420p', crf: 19, save_metadata: false } }\n};\n\n// Para roteiro com múltiplas cenas, poderíamos criar múltiplos KSamplers, mas aqui mantemos 1 vídeo geral\n// Opcional: injetar cenas nos prompts extras para referência\nconst meta = { tipo, product, style, duration, cenas: cenas.map(c => ({ nome: c.nome, prompt: (c.prompt || c.descricao || '').slice(0,200) })), roteiro_hook: roteiro.hook || '' };\n\nreturn [{ json: { job_id: job.job_id, tipo, callback_url: job.callback_url, token: job.token, product, prompt: promptPositivo, meta, input: { workflow } } }];"
       },
       "id": "a1000000-0000-4000-8000-000000000003",
-      "name": "Montar Workflow ComfyUI",
+      "name": "Montar Workflow ComfyUI Vídeo",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-160, 60]
+      "position": [-380, 60]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.RUNPOD_ENDPOINT }}/v2/run",
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/run",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
@@ -49,25 +49,28 @@
         "options": { "timeout": 30000 }
       },
       "id": "a1000000-0000-4000-8000-000000000004",
-      "name": "RunPod · Enviar Job",
+      "name": "RunPod · Enviar Job Vídeo",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [60, 60],
+      "position": [-160, 60],
       "credentials": {
         "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key (Authorization)" }
       }
     },
     {
-      "parameters": { "amount": 10, "unit": "seconds" },
+      "parameters": {
+        "amount": 12,
+        "unit": "seconds"
+      },
       "id": "a1000000-0000-4000-8000-000000000005",
       "name": "Aguardar Render",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [280, 60]
+      "position": [60, 60]
     },
     {
       "parameters": {
-        "url": "={{ $env.RUNPOD_ENDPOINT }}/v2/status/{{ $json.id || $('RunPod · Enviar Job').first().json.id }}",
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/status/{{ $json.id || $('RunPod · Enviar Job Vídeo').first().json.id }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": { "timeout": 30000 }
@@ -76,7 +79,7 @@
       "name": "RunPod · Status",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [500, 60],
+      "position": [280, 60],
       "credentials": {
         "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key (Authorization)" }
       }
@@ -88,8 +91,8 @@
           "conditions": [
             {
               "leftValue": "={{ $json.status }}",
-              "rightValue": "COMPLETED",
-              "operator": { "type": "string", "operation": "equals" }
+              "operator": { "type": "string", "operation": "equals" },
+              "rightValue": "COMPLETED"
             }
           ],
           "combinator": "and"
@@ -100,17 +103,17 @@
       "name": "Renderizou?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [720, 60]
+      "position": [500, 60]
     },
     {
       "parameters": {
-        "jsCode": "// Extrai a URL do arquivo gerado (vídeo ou imagem) da resposta do RunPod.\nconst r = $input.first().json;\nconst out = r.output;\nlet url = '';\nif (typeof out === 'string') url = out;\nelse if (Array.isArray(out)) url = out.find(x => typeof x === 'string') || '';\nelse if (out && typeof out === 'object') {\n  url = out.video_url || out.url || JSON.stringify(out);\n}\nconst job = $('Montar Workflow ComfyUI').first().json;\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, video_url: url, cost_usd: r.cost || null } }];"
+        "jsCode": "// Extrai URLs de vídeo e imagens do output RunPod\nconst r = $input.first().json;\nconst out = r.output || {};\nlet video_url = '';\nlet images = [];\n\n// RunPod worker-comfyui pode retornar de várias formas\nif (typeof out === 'string') video_url = out;\nelse if (Array.isArray(out)) {\n  // array de strings ou objetos\n  for (const item of out) {\n    if (typeof item === 'string' && (item.includes('.mp4') || item.includes('video'))) video_url = item;\n    else if (typeof item === 'object' && item.url) {\n      if (item.url.includes('.mp4')) video_url = item.url;\n      else images.push({ url: item.url, prompt: '', cena: '' });\n    }\n  }\n} else if (out && typeof out === 'object') {\n  video_url = out.video_url || out.video || out.url || '';\n  // tenta extrair images\n  if (out.images && Array.isArray(out.images)) {\n    images = out.images.map(img => typeof img === 'string' ? { url: img } : { url: img.url || img.filename || '', prompt: img.prompt || '' });\n  }\n  if (out.message && typeof out.message === 'string' && out.message.includes('http')) {\n    // fallback: procura URL na mensagem\n    const m = out.message.match(/https?:\\/\\/[^\\s]+\\.mp4[^\\s]*/);\n    if (m) video_url = m[0];\n  }\n  // Se não tem video_url mas tem filename, constrói URL via R2/S3 base\n  if (!video_url && out.filename) video_url = out.filename;\n}\n\nconst job = $('Montar Workflow ComfyUI Vídeo').first().json;\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, video_url, images, meta: job.meta, cost_usd: r.cost || r.executionTime ? (r.executionTime/1000*0.0005) : null } }];"
       },
       "id": "a1000000-0000-4000-8000-000000000008",
-      "name": "Extrair URL do Resultado",
+      "name": "Extrair URLs Vídeo",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [940, -40]
+      "position": [720, -40]
     },
     {
       "parameters": {
@@ -124,50 +127,61 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'pronto', video_url: $json.video_url, cost_usd: $json.cost_usd }) }}",
+        "jsonBody": "={{ JSON.stringify({ status: 'pronto', video_url: $json.video_url, images: $json.images, cost_usd: $json.cost_usd }) }}",
         "options": { "timeout": 30000 }
       },
       "id": "a1000000-0000-4000-8000-000000000009",
       "name": "MineraAI · Entregar Vídeo",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1160, -40]
+      "position": [940, -40]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $('Montar Workflow ComfyUI').first().json.callback_url }}",
+        "url": "={{ $('Montar Workflow ComfyUI Vídeo').first().json.callback_url }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-Pipeline-Token", "value": "={{ $('Montar Workflow ComfyUI').first().json.token }}" }
+            { "name": "X-Pipeline-Token", "value": "={{ $('Montar Workflow ComfyUI Vídeo').first().json.token }}" }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'erro', error: 'Falha no render: ' + JSON.stringify($json).slice(0, 300) }) }}",
+        "jsonBody": "={{ JSON.stringify({ status: 'erro', error: 'Falha no render vídeo: ' + JSON.stringify($json).slice(0, 400) }) }}",
         "options": {}
       },
       "id": "a1000000-0000-4000-8000-000000000010",
-      "name": "MineraAI · Reportar Erro",
+      "name": "MineraAI · Reportar Erro Vídeo",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [940, 220]
+      "position": [720, 200]
+    },
+    {
+      "parameters": {
+        "amount": 8,
+        "unit": "seconds"
+      },
+      "id": "a1000000-0000-4000-8000-000000000011",
+      "name": "Aguardar Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [500, 200]
     }
   ],
   "connections": {
-    "MineraAI · Novo Job": {
+    "MineraAI · Novo Job Vídeo": {
       "main": [
         [
           { "node": "Responder MineraAI (202)", "type": "main", "index": 0 },
-          { "node": "Montar Workflow ComfyUI", "type": "main", "index": 0 }
+          { "node": "Montar Workflow ComfyUI Vídeo", "type": "main", "index": 0 }
         ]
       ]
     },
-    "Montar Workflow ComfyUI": {
-      "main": [[{ "node": "RunPod · Enviar Job", "type": "main", "index": 0 }]]
+    "Montar Workflow ComfyUI Vídeo": {
+      "main": [[{ "node": "RunPod · Enviar Job Vídeo", "type": "main", "index": 0 }]]
     },
-    "RunPod · Enviar Job": {
+    "RunPod · Enviar Job Vídeo": {
       "main": [[{ "node": "Aguardar Render", "type": "main", "index": 0 }]]
     },
     "Aguardar Render": {
@@ -178,11 +192,14 @@
     },
     "Renderizou?": {
       "main": [
-        [{ "node": "Extrair URL do Resultado", "type": "main", "index": 0 }],
-        [{ "node": "MineraAI · Reportar Erro", "type": "main", "index": 0 }]
+        [{ "node": "Extrair URLs Vídeo", "type": "main", "index": 0 }],
+        [{ "node": "Aguardar Retry", "type": "main", "index": 0 }]
       ]
     },
-    "Extrair URL do Resultado": {
+    "Aguardar Retry": {
+      "main": [[{ "node": "RunPod · Status", "type": "main", "index": 0 }]]
+    },
+    "Extrair URLs Vídeo": {
       "main": [[{ "node": "MineraAI · Entregar Vídeo", "type": "main", "index": 0 }]]
     }
   },

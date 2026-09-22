@@ -1,0 +1,172 @@
+{
+  "name": "MineraAI · Fábrica de Imagens (ComfyUI + RunPod) — prompts",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mineraai-imagem-job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "MineraAI · Novo Job Imagem",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-600, 0],
+      "webhookId": "mineraai-imagem-job"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, job_id: $json.body.job_id, tipo: 'imagem', message: 'Job de imagem recebido — gerando no ComfyUI RunPod' }) }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000002",
+      "name": "Responder 202 Imagem",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-380, -180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// MineraAI → ComfyUI RunPod — FÁBRICA DE IMAGENS\n// Recebe prompts do MineraAI (produto + prompts extras + roteiro)\n// ============================================================\nconst job = $input.first().json.body || $input.first().json;\nconst product = job.product || 'produto';\nconst style = job.style || 'produto';\nconst prompts = job.prompts || [];\nconst roteiro = job.roteiro || {};\n\nconst STYLE_PREFIX = {\n  ugc: 'foto amadora UGC, luz natural, iPhone, casa real, autêntico, ', \n  dark: 'dark aesthetic, moody, cinematic, misterioso, ', \n  cinematic: 'cinematic lighting, 8k, ultra detailed, professional, ', \n  produto: 'product photography, studio lighting, commercial, high detail, sharp focus, ', \n  anime: 'anime style, vibrant, detailed illustration, '\n};\nconst prefix = STYLE_PREFIX[style] || STYLE_PREFIX.produto;\n\nlet promptList = [];\nif (prompts.length) {\n  promptList = prompts.slice(0,4);\n} else if (roteiro.cenas && roteiro.cenas.length) {\n  promptList = roteiro.cenas.map(c => `${prefix}${c.prompt || c.descricao || ''}, ${product}, 9:16 vertical, alta qualidade`);\n} else {\n  const base = job.prompt || product;\n  promptList = [\n    `${prefix}${base}, close-up produto, 9:16 vertical`,\n    `${prefix}${base}, lifestyle cozinha real, mão segurando, 9:16`,\n    `${prefix}${base}, flat lay mesa, organização, 9:16`\n  ];\n}\n\n// Garante 1-4 prompts\npromptList = promptList.slice(0,4).map(p => p.slice(0,1200));\nconst batchSize = promptList.length;\n\n// Monta 1 workflow com batch ou múltiplos KSamplers? Aqui usamos batch_size = N com 1 KSampler para simplicidade\n// Para prompts diferentes por imagem, criamos múltiplos CLIPTextEncode + KSampler\nconst seedBase = Math.floor(Math.random()*1e12);\nconst workflow = {};\n\n// Loader\nworkflow['1'] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' } };\nworkflow['2'] = { class_type: 'EmptyLatentImage', inputs: { width: 768, height: 1344, batch_size: 1 } };\nworkflow['7'] = { class_type: 'CLIPTextEncode', inputs: { text: \"low quality, blurry, watermark, logo, text, deformed, extra limbs, cartoon, drawing, bad anatomy\", clip: ['1',1] } };\n\n// Para cada prompt, cria encode + sampler + decode + save\npromptList.forEach((p, idx) => {\n  const idBase = 10 + idx*10;\n  workflow[`${idBase}`] = { class_type: 'CLIPTextEncode', inputs: { text: p, clip: ['1',1] } };\n  workflow[`${idBase+1}`] = { class_type: 'KSampler', inputs: { seed: seedBase+idx, steps: 28, cfg: 7.5, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['1',0], positive: [`${idBase}`,0], negative: ['7',0], latent_image: ['2',0] } };\n  workflow[`${idBase+2}`] = { class_type: 'VAEDecode', inputs: { samples: [`${idBase+1}`,0], vae: ['1',2] } };\n  workflow[`${idBase+3}`] = { class_type: 'SaveImage', inputs: { filename_prefix: `mineraai/imagem_${job.job_id}_${idx}`, images: [`${idBase+2}`,0] } };\n});\n\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, product, prompts: promptList, batchSize, input: { workflow } } }];"
+      },
+      "id": "b1000000-0000-4000-8000-000000000003",
+      "name": "Montar Workflow Imagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-380, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: $json.input }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "b1000000-0000-4000-8000-000000000004",
+      "name": "RunPod · Enviar Imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 60],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "b1000000-0000-4000-8000-000000000005",
+      "name": "Aguardar Imagem",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [60, 60]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/status/{{ $json.id || $('RunPod · Enviar Imagem').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 30000 }
+      },
+      "id": "b1000000-0000-4000-8000-000000000006",
+      "name": "RunPod · Status Imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 60],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.status }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "COMPLETED" }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000007",
+      "name": "Imagem Pronta?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai imagens do output RunPod\nconst r = $input.first().json;\nconst out = r.output || {};\nlet images = [];\nlet job = $('Montar Workflow Imagem').first().json;\n\nif (Array.isArray(out)) {\n  images = out.map((item, idx) => typeof item === 'string' ? { url: item, prompt: job.prompts[idx] || '', cena: `imagem_${idx}` } : { url: item.url || item.filename || '', prompt: job.prompts[idx] || '' });\n} else if (out.images) {\n  const arr = Array.isArray(out.images) ? out.images : [out.images];\n  images = arr.map((img, idx) => typeof img === 'string' ? { url: img, prompt: job.prompts[idx] || '' } : { url: img.url || img.filename || JSON.stringify(img).slice(0,200), prompt: job.prompts[idx] || '' });\n} else if (out.url) {\n  images = [{ url: out.url, prompt: job.prompts[0] || '' }];\n} else if (typeof out === 'object') {\n  // tenta encontrar qualquer URL\n  const str = JSON.stringify(out);\n  const urls = str.match(/https?:\\/\\/[^\"\\s]+\\.(png|jpg|jpeg|webp)/g);\n  if (urls) images = urls.map((u, idx) => ({ url: u, prompt: job.prompts[idx] || '' }));\n}\n\n// fallback: se RunPod retorna base64 ou filename, mantém\nif (!images.length && out.message) {\n  images = [{ url: out.message, prompt: job.prompts[0] || '' }];\n}\n\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, images, video_url: '', cost_usd: r.cost || null } }];"
+      },
+      "id": "b1000000-0000-4000-8000-000000000008",
+      "name": "Extrair Imagens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, -40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Pipeline-Token", "value": "={{ $json.token }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'pronto', images: $json.images, video_url: '', cost_usd: $json.cost_usd }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "b1000000-0000-4000-8000-000000000009",
+      "name": "MineraAI · Entregar Imagens",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, -40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Montar Workflow Imagem').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Pipeline-Token", "value": "={{ $('Montar Workflow Imagem').first().json.token }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'erro', error: 'Falha imagem: ' + JSON.stringify($json).slice(0, 300) }) }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000010",
+      "name": "Reportar Erro Imagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 180]
+    },
+    {
+      "parameters": {
+        "amount": 6,
+        "unit": "seconds"
+      },
+      "id": "b1000000-0000-4000-8000-000000000011",
+      "name": "Retry Imagem",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [500, 180]
+    }
+  ],
+  "connections": {
+    "MineraAI · Novo Job Imagem": { "main": [[{ "node": "Responder 202 Imagem", "type": "main", "index": 0 }, { "node": "Montar Workflow Imagem", "type": "main", "index": 0 }]] },
+    "Montar Workflow Imagem": { "main": [[{ "node": "RunPod · Enviar Imagem", "type": "main", "index": 0 }]] },
+    "RunPod · Enviar Imagem": { "main": [[{ "node": "Aguardar Imagem", "type": "main", "index": 0 }]] },
+    "Aguardar Imagem": { "main": [[{ "node": "RunPod · Status Imagem", "type": "main", "index": 0 }]] },
+    "RunPod · Status Imagem": { "main": [[{ "node": "Imagem Pronta?", "type": "main", "index": 0 }]] },
+    "Imagem Pronta?": { "main": [[{ "node": "Extrair Imagens", "type": "main", "index": 0 }], [{ "node": "Retry Imagem", "type": "main", "index": 0 }]] },
+    "Retry Imagem": { "main": [[{ "node": "RunPod · Status Imagem", "type": "main", "index": 0 }]] },
+    "Extrair Imagens": { "main": [[{ "node": "MineraAI · Entregar Imagens", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

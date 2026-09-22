@@ -1,0 +1,172 @@
+{
+  "name": "MineraAI · Fábrica MISTA (Imagem + Vídeo) — roteiro completo",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mineraai-misto-job",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d1000000-0000-4000-8000-000000000001",
+      "name": "MineraAI · Job Misto",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 0],
+      "webhookId": "mineraai-misto-job"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, job_id: $json.body.job_id, tipo: 'misto', message: 'Job misto (imagem+video) recebido — produção ComfyUI RunPod iniciada' }) }}",
+        "options": {}
+      },
+      "id": "d1000000-0000-4000-8000-000000000002",
+      "name": "Responder 202 Misto",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-480, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// MineraAI → ComfyUI RunPod — FÁBRICA MISTA (imagem + vídeo)\n// Recebe roteiro cena a cena e gera kit completo\n// ============================================================\nconst job = $input.first().json.body || $input.first().json;\nconst product = job.product || 'produto';\nconst style = job.style || 'ugc';\nconst duration = job.duration || 6;\nconst roteiro = job.roteiro || {};\nconst promptsExtras = job.prompts || [];\n\nconst STYLE_PREFIX = {\n  ugc: 'foto amadora UGC, luz natural, iPhone, casa real, autêntico, ', \n  dark: 'dark aesthetic, moody, cinematic, misterioso, ', \n  cinematic: 'cinematic lighting, 8k, ultra detailed, professional, ', \n  produto: 'product photography, studio lighting, commercial, high detail, ', \n  anime: 'anime style, vibrant, detailed illustration, '\n};\nconst prefix = STYLE_PREFIX[style] || STYLE_PREFIX.ugc;\n\n// Roteiro: se não veio, cria a partir do prompt\nlet cenas = roteiro.cenas || [];\nif (!cenas.length) {\n  const base = job.prompt || product;\n  cenas = [\n    { nome: 'GANCHO', descricao: `Hook forte para ${product}`, prompt: `${prefix} close-up reação surpresa, ${product} desfocado fundo, hook visual, 9:16`, duracao: '2s' },\n    { nome: 'PROBLEMA', descricao: `Dor que ${product} resolve`, prompt: `${prefix} pessoa com problema, bagunça, antes do produto, 9:16`, duracao: '2s' },\n    { nome: 'DEMO', descricao: `Demo real ${product}`, prompt: `${prefix} ${base}, demonstração uso real, cozinha real, mão segurando, 9:16 vertical`, duracao: '3s' },\n    { nome: 'CTA', descricao: `CTA`, prompt: `${prefix} ${product} com overlay CTA 'LINK NA BIO', destaque, 9:16`, duracao: '1s' }\n  ];\n}\n\n// Prompts de imagem por cena\nconst imagemPrompts = cenas.map(c => `${c.prompt || c.descricao || ''}, ${product}, estilo ${style}, 9:16 vertical, alta qualidade`.slice(0,1200));\n// Prompt de vídeo geral\nconst videoPrompt = `${prefix}${job.prompt || ''}, Produto: ${product}, roteiro: ${roteiro.hook || ''} ${roteiro.narracao || ''}, ${cenas.map(c => c.descricao).join('. ')}, vertical 9:16, movimento suave, 6s`.slice(0,1500);\n\n// Workflow MISTO: 4 imagens + 1 video (AnimateDiff)\nconst seedBase = Math.floor(Math.random()*1e12);\nconst workflow = {};\n\n// Loaders\nworkflow['1'] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' } };\nworkflow['2'] = { class_type: 'EmptyLatentImage', inputs: { width: 768, height: 1344, batch_size: 1 } };\nworkflow['7'] = { class_type: 'CLIPTextEncode', inputs: { text: \"low quality, blurry, watermark, logo, text, deformed, extra limbs, cartoon, drawing\", clip: ['1',1] } };\nworkflow['40'] = { class_type: 'ADE_LoadAnimateDiffModel', inputs: { model_name: 'mm_sd_v15_v2.ckpt' } };\nworkflow['41'] = { class_type: 'ADE_AnimateDiffLoaderWithContext', inputs: { model: ['1',0], motion_model: ['40',0], beta_schedule: 'sqrt_linear (AnimateDiff)', context_length: 16, context_stride: 1, context_overlap: 4 } };\nworkflow['42'] = { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 768, batch_size: 16 } };\n\n// Imagens por cena\nimagemPrompts.forEach((p, idx) => {\n  const idBase = 10 + idx*10;\n  workflow[`${idBase}`] = { class_type: 'CLIPTextEncode', inputs: { text: p, clip: ['1',1] } };\n  workflow[`${idBase+1}`] = { class_type: 'KSampler', inputs: { seed: seedBase+idx, steps: 28, cfg: 7.5, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['1',0], positive: [`${idBase}`,0], negative: ['7',0], latent_image: ['2',0] } };\n  workflow[`${idBase+2}`] = { class_type: 'VAEDecode', inputs: { samples: [`${idBase+1}`,0], vae: ['1',2] } };\n  workflow[`${idBase+3}`] = { class_type: 'SaveImage', inputs: { filename_prefix: `mineraai/misto_${job.job_id}_cena_${idx}_${cenas[idx]?.nome || 'img'}`, images: [`${idBase+2}`,0] } };\n});\n\n// Vídeo geral\nworkflow['90'] = { class_type: 'CLIPTextEncode', inputs: { text: videoPrompt, clip: ['1',1] } };\nworkflow['91'] = { class_type: 'KSampler', inputs: { seed: seedBase+100, steps: 25, cfg: 7.0, sampler_name: 'dpmpp_2m', scheduler: 'karras', denoise: 1, model: ['41',0], positive: ['90',0], negative: ['7',0], latent_image: ['42',0] } };\nworkflow['92'] = { class_type: 'VAEDecode', inputs: { samples: ['91',0], vae: ['1',2] } };\nworkflow['93'] = { class_type: 'VHS_VideoCombine', inputs: { images: ['92',0], frame_rate: 8, loop_count: 0, filename_prefix: `mineraai/misto_${job.job_id}_video`, format: 'video/h264-mp4', pix_fmt: 'yuv420p', crf: 19 } };\n\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, product, cenas, imagemPrompts, videoPrompt, input: { workflow } } }];"
+      },
+      "id": "d1000000-0000-4000-8000-000000000003",
+      "name": "Montar Workflow Misto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 60]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ input: $json.input }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "d1000000-0000-4000-8000-000000000004",
+      "name": "RunPod · Enviar Misto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-260, 60],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "d1000000-0000-4000-8000-000000000005",
+      "name": "Aguardar Misto",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-40, 60]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.RUNPOD_ENDPOINT }}/status/{{ $json.id || $('RunPod · Enviar Misto').first().json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 30000 }
+      },
+      "id": "d1000000-0000-4000-8000-000000000006",
+      "name": "RunPod · Status Misto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [180, 60],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SUBSTITUA", "name": "RunPod API Key" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.status }}", "operator": { "type": "string", "operation": "equals" }, "rightValue": "COMPLETED" }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d1000000-0000-4000-8000-000000000007",
+      "name": "Misto Pronto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [400, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai video + imagens do output misto\nconst r = $input.first().json;\nconst out = r.output || {};\nlet video_url = '';\nlet images = [];\nconst job = $('Montar Workflow Misto').first().json;\n\nif (typeof out === 'object' && !Array.isArray(out)) {\n  video_url = out.video_url || out.video || '';\n  if (out.images) {\n    images = out.images.map((img, idx) => typeof img === 'string' ? { url: img, prompt: job.imagemPrompts[idx] || '', cena: job.cenas[idx]?.nome || `cena_${idx}` } : { url: img.url || img.filename || '', prompt: job.imagemPrompts[idx] || img.prompt || '', cena: job.cenas[idx]?.nome || '' });\n  }\n  // fallback procura urls\n  if (!video_url) {\n    const s = JSON.stringify(out);\n    const vMatch = s.match(/https?:\\/\\/[^\"\\s]+\\.mp4[^\"\\s]*/);\n    if (vMatch) video_url = vMatch[0];\n  }\n  if (!images.length) {\n    const s = JSON.stringify(out);\n    const iMatches = s.match(/https?:\\/\\/[^\"\\s]+\\.(png|jpg|jpeg|webp)[^\"\\s]*/g);\n    if (iMatches) images = iMatches.map((u, idx) => ({ url: u, prompt: job.imagemPrompts[idx] || '', cena: job.cenas[idx]?.nome || '' }));\n  }\n} else if (Array.isArray(out)) {\n  for (const item of out) {\n    if (typeof item === 'string') {\n      if (item.includes('.mp4')) video_url = item;\n      else images.push({ url: item, prompt: '', cena: '' });\n    } else if (item.url) {\n      if (item.url.includes('.mp4')) video_url = item.url;\n      else images.push({ url: item.url, prompt: item.prompt || '' });\n    }\n  }\n}\n\n// Se ainda vazio, usa mensagem\nif (!video_url && !images.length) {\n  video_url = out.message || '';\n}\n\nreturn [{ json: { job_id: job.job_id, callback_url: job.callback_url, token: job.token, video_url, images, cenas: job.cenas, cost_usd: r.cost || null } }];"
+      },
+      "id": "d1000000-0000-4000-8000-000000000008",
+      "name": "Extrair Misto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, -40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Pipeline-Token", "value": "={{ $json.token }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'pronto', video_url: $json.video_url, images: $json.images, cost_usd: $json.cost_usd }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "d1000000-0000-4000-8000-000000000009",
+      "name": "MineraAI · Entregar Misto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, -40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Montar Workflow Misto').first().json.callback_url }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "X-Pipeline-Token", "value": "={{ $('Montar Workflow Misto').first().json.token }}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'erro', error: 'Falha misto: ' + JSON.stringify($json).slice(0, 400) }) }}",
+        "options": {}
+      },
+      "id": "d1000000-0000-4000-8000-000000000010",
+      "name": "Reportar Erro Misto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 200]
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "d1000000-0000-4000-8000-000000000011",
+      "name": "Retry Misto",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [400, 200]
+    }
+  ],
+  "connections": {
+    "MineraAI · Job Misto": { "main": [[{ "node": "Responder 202 Misto", "type": "main", "index": 0 }, { "node": "Montar Workflow Misto", "type": "main", "index": 0 }]] },
+    "Montar Workflow Misto": { "main": [[{ "node": "RunPod · Enviar Misto", "type": "main", "index": 0 }]] },
+    "RunPod · Enviar Misto": { "main": [[{ "node": "Aguardar Misto", "type": "main", "index": 0 }]] },
+    "Aguardar Misto": { "main": [[{ "node": "RunPod · Status Misto", "type": "main", "index": 0 }]] },
+    "RunPod · Status Misto": { "main": [[{ "node": "Misto Pronto?", "type": "main", "index": 0 }]] },
+    "Misto Pronto?": { "main": [[{ "node": "Extrair Misto", "type": "main", "index": 0 }], [{ "node": "Retry Misto", "type": "main", "index": 0 }]] },
+    "Retry Misto": { "main": [[{ "node": "RunPod · Status Misto", "type": "main", "index": 0 }]] },
+    "Extrair Misto": { "main": [[{ "node": "MineraAI · Entregar Misto", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
