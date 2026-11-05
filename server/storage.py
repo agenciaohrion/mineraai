@@ -66,23 +66,62 @@ def library_remove(item_id: str) -> bool:
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 ENV_KEYS = [
+    # ---- plataformas oficiais
     "YOUTUBE_API_KEY",
     "TIKTOK_CLIENT_KEY",
     "TIKTOK_CLIENT_SECRET",
     "IG_ACCESS_TOKEN",
     "IG_USER_ID",
-    "GROQ_API_KEY",
-    "GEMINI_API_KEY",
+    # ---- IA (OpenAI e Gemini SEPARADOS)
+    "AI_PROVIDER",              # openai | gemini | internal
     "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
     "OPENAI_MODEL",
-    "SCRAPLING_ENABLED",
-    "SCRAPLING_STEALTHY",
-    "N8N_WEBHOOK_URL",
-    "N8N_TOKEN",
-    "MINERAAI_PUBLIC_URL",
+    "OPENAI_BASE_URL",
+    "GEMINI_API_KEY",
+    "GEMINI_MODEL",
+    # ---- dados pagos: Virlo API (Orbit / Comet / Satellite)
+    "VIRLO_API_KEY",
+    "VIRLO_BASE_URL",
+    "VIRLO_AUTO_USE",           # 1 = usa Virlo como fonte no Radar
+    # ---- fonte gratuita: Reddit (OAuth client_credentials)
+    "REDDIT_CLIENT_ID",
+    "REDDIT_CLIENT_SECRET",
+    "REDDIT_USER_AGENT",
+    "REDDIT_DEFAULT_SUB",
+    # ---- fonte gratuita: Mercado Livre (OAuth authorization_code)
+    "MELI_CLIENT_ID",
+    "MELI_CLIENT_SECRET",
+    "MELI_REDIRECT_URI",
+    "MELI_SITE_ID",
+    "MELI_ACCESS_TOKEN",
+    "MELI_REFRESH_TOKEN",
+    "MELI_TOKEN_EXPIRES_AT",
+    # ---- fonte gratuita: Google Suggest (+ CSE opcional)
+    "GOOGLE_SUGGEST_HL",
+    "GOOGLE_SUGGEST_GL",
+    "GOOGLE_CSE_API_KEY",
+    "GOOGLE_CSE_CX",
+    # ---- fonte gratuita: oEmbed
+    "OEMBED_TIMEOUT",
+    "OEMBED_PROXY",
+    # ---- fonte gratuita: Google Trends
+    "TRENDS_GEO",
+    "TRENDS_LANGUAGE",
+    # ---- fonte gratuita: Pexels
     "PEXELS_API_KEY",
+    # ---- produção direta: RunPod serverless (ComfyUI)
+    "RUNPOD_API_KEY",
+    "RUNPOD_ENDPOINT_ID",
+    "RUNPOD_BASE_URL",
+    "RUNPOD_TIMEOUT",
+    "RUNPOD_WORKFLOW_TEMPLATE",
+    "RUNPOD_GPU_PRICE_HORA",    # US$/hora da GPU, para estimar custo
 ]
+
+# Chaves sensíveis (mascaradas na leitura pública)
+SECRET_KEYS = {k for k in ENV_KEYS if any(t in k for t in
+               ("KEY", "SECRET", "TOKEN", "PASSWORD"))}
+
 
 
 def settings_get() -> dict:
@@ -106,6 +145,10 @@ def settings_save(patch: dict) -> dict:
                 saved[k] = (v or "").strip()
         _write(SETTINGS_FILE, saved)
     return settings_get()
+
+
+def is_secret(name: str) -> bool:
+    return name in SECRET_KEYS
 
 
 def secret_mask(value: str) -> str:

@@ -1,8 +1,9 @@
 """Motor de IA do Estúdio — gratuito por padrão.
 
 Estratégia em camadas:
-  1. Se GROQ_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY estiver configurada,
-     usamos o LLM real (tiers gratuitos existem nos três).
+  1. Se OPENAI_API_KEY ou GEMINI_API_KEY estiver configurada (provedores
+     separados, cada um com seu modelo e seu teste), usamos o LLM real.
+     `AI_PROVIDER=openai|gemini` escolhe; `AI_PROVIDER=internal` ignora LLM.
   2. Caso contrário (ou se a chamada falhar), cai no motor interno baseado em
      frameworks de copywriting (AIDA, PAS, hooks de padrão) — 100% offline.
 """
@@ -21,15 +22,48 @@ TIMEOUT = 45.0
 
 
 # ================================================================= LLM
+# OpenAI e Gemini são provedores SEPARADOS: chave, modelo e teste próprios.
+# `AI_PROVIDER` decide qual usar; "internal" força o motor offline (grátis).
 def _llm_config() -> Optional[tuple[str, str]]:
     cfg = storage.settings_get()
-    if cfg.get("GROQ_API_KEY"):
-        return ("groq", cfg["GROQ_API_KEY"])
-    if cfg.get("GEMINI_API_KEY"):
-        return ("gemini", cfg["GEMINI_API_KEY"])
-    if cfg.get("OPENAI_API_KEY"):
-        return ("openai", cfg["OPENAI_API_KEY"])
+    escolha = (cfg.get("AI_PROVIDER") or "").strip().lower()
+    if escolha == "internal":
+        return None
+    ordem = [escolha] if escolha in ("openai", "gemini") else ["openai", "gemini"]
+    for provedor in ordem:
+        if provedor == "openai" and cfg.get("OPENAI_API_KEY"):
+            return ("openai", cfg["OPENAI_API_KEY"])
+        if provedor == "gemini" and cfg.get("GEMINI_API_KEY"):
+            return ("gemini", cfg["GEMINI_API_KEY"])
     return None
+
+
+async def _openai_chat(key: str, prompt: str) -> str:
+    cfg = storage.settings_get()
+    base = (cfg.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            base + "/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": cfg.get("OPENAI_MODEL") or "gpt-4o-mini",
+                  "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.85})
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+
+async def _gemini_chat(key: str, prompt: str) -> str:
+    cfg = storage.settings_get()
+    modelo = cfg.get("GEMINI_MODEL") or "gemini-2.0-flash"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}"
+            f":generateContent?key={key}",
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0.85}})
+        r.raise_for_status()
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts)
 
 
 async def _ask_llm(prompt: str) -> Optional[str]:
@@ -38,39 +72,39 @@ async def _ask_llm(prompt: str) -> Optional[str]:
         return None
     kind, key = prov
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            if kind == "groq":
-                r = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={"model": "llama-3.3-70b-versatile",
-                          "messages": [{"role": "user", "content": prompt}],
-                          "temperature": 0.85})
-                r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"]
-            if kind == "openai":
-                cfg = storage.settings_get()
-                r = await client.post(
-                    (cfg.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-                    + "/chat/completions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    json={"model": cfg.get("OPENAI_MODEL") or "gpt-4o-mini",
-                          "messages": [{"role": "user", "content": prompt}],
-                          "temperature": 0.85})
-                r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"]
-            if kind == "gemini":
-                r = await client.post(
-                    "https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"gemini-2.0-flash:generateContent?key={key}",
-                    json={"contents": [{"parts": [{"text": prompt}]}],
-                          "generationConfig": {"temperature": 0.85}})
-                r.raise_for_status()
-                parts = r.json()["candidates"][0]["content"]["parts"]
-                return "".join(p.get("text", "") for p in parts)
+        if kind == "openai":
+            return await _openai_chat(key, prompt)
+        if kind == "gemini":
+            return await _gemini_chat(key, prompt)
     except Exception:
         return None
     return None
+
+
+async def test_provider(provedor: str) -> dict:
+    """Teste isolado por provedor — cada card da UI tem o seu botão."""
+    cfg = storage.settings_get()
+    if provedor == "openai":
+        key = cfg.get("OPENAI_API_KEY")
+        if not key:
+            return {"ok": False, "message": "Informe a API key da OpenAI."}
+        try:
+            texto = await _openai_chat(key, "Responda apenas: ok")
+            return {"ok": bool(texto),
+                    "message": f"OpenAI respondeu ({cfg.get('OPENAI_MODEL') or 'gpt-4o-mini'})"}
+        except Exception as exc:
+            return {"ok": False, "message": f"OpenAI recusou: {type(exc).__name__}"}
+    if provedor == "gemini":
+        key = cfg.get("GEMINI_API_KEY")
+        if not key:
+            return {"ok": False, "message": "Informe a API key do Gemini."}
+        try:
+            texto = await _gemini_chat(key, "Responda apenas: ok")
+            return {"ok": bool(texto),
+                    "message": f"Gemini respondeu ({cfg.get('GEMINI_MODEL') or 'gemini-2.0-flash'})"}
+        except Exception as exc:
+            return {"ok": False, "message": f"Gemini recusou: {type(exc).__name__}"}
+    return {"ok": False, "message": "Provedor desconhecido"}
 
 
 def _rnd(*parts) -> random.Random:

@@ -10,16 +10,15 @@ O código está em `github.com/agenciaohrion/mineraai`. Na VPS:
 # 1) dependências básicas (Ubuntu/Debian da Contabo)
 sudo apt update && sudo apt install -y git python3 python3-venv python3-pip
 
-# 2) clonar (branch da sessão; se o PR #1 for mergeado, use main)
+# 2) clonar
 cd /opt
 sudo git clone https://github.com/agenciaohrion/mineraai.git
 sudo chown -R $USER:$USER /opt/mineraai
 cd /opt/mineraai
-git checkout arena/01a0ab0a-mineraai
 
-# 3) configurar chaves/APIs (opcional — sem nada roda em modo demo + coleta)
+# 3) configurar chaves/APIs (opcional — sem nada roda em modo demonstração)
 cp .env.example .env
-nano .env    # YOUTUBE_API_KEY, N8N_WEBHOOK_URL, MINERAAI_PUBLIC_URL etc.
+nano .env    # YOUTUBE_API_KEY, VIRLO_API_KEY, OPENAI_API_KEY, RUNPOD_* etc.
 
 # 4) subir (cria o venv e instala tudo automaticamente)
 ./run.sh
@@ -69,16 +68,25 @@ Sem domínio? Aponte o `server_name` para o IP da Contabo e acesse
 `http://IP_DA_CONTABO` (libere as portas 80/443 no painel da Contabo e no
 `ufw`: `sudo ufw allow 80/tcp && sudo ufw allow 443/tcp`).
 
-## Conectar o n8n / agente Hermes
+## Conectar as integrações
 
-1. Com o MineraAI público (ex.: `https://seu-dominio.com.br`), vá em
-   **APIs & Conexões** e preencha:
-   - `MINERAAI_PUBLIC_URL` = `https://seu-dominio.com.br`
-   - `N8N_WEBHOOK_URL` = webhook do seu agente/workflow n8n
-   - `N8N_TOKEN` = um segredo qualquer (use o mesmo nos callbacks)
-2. Teste com o botão **Testar conexão**.
-3. Importe os workflows de `n8n/` no n8n e defina `MINERAAI_URL`
-   (env do n8n) = `https://seu-dominio.com.br`.
+Nada de orquestrador externo: cada integração é chamada direto pelo servidor.
+
+1. Abra **APIs & Conexões** em `https://seu-dominio.com.br`.
+2. Preencha só os cards que você tem e clique em **Testar** em cada um:
+   - **RunPod** → `RUNPOD_API_KEY` + `RUNPOD_ENDPOINT_ID` → botão 🩺 Health;
+   - **Virlo** → `VIRLO_API_KEY` (`virlo_tkn_…`) → botão 💰 Saldo;
+   - **Reddit** → `REDDIT_CLIENT_ID`+`SECRET` → 🔑 Emitir token OAuth;
+   - **Mercado Livre** → `MELI_CLIENT_ID`+`SECRET` → 🔗 Autorizar (OAuth).
+3. **Mercado Livre**: cadastre a URL de callback no app do Mercado Livre
+   (Developers → sua aplicação → Redirect URI):
+   `https://seu-dominio.com.br/api/integrations/meli/callback`
+   O valor exato aparece em `GET /api/integrations` (`meli_redirect_uri`).
+4. Quem preferir `.env`: as chaves têm os mesmos nomes e são lidas no boot.
+   O que for salvo pela UI tem prioridade sobre o arquivo.
+
+> O OAuth do Mercado Livre exige que o domínio seja público e HTTPS — o token de
+> acesso dura 6h e é renovado automaticamente pelo próprio servidor.
 
 ## Rotinas úteis
 
@@ -92,5 +100,7 @@ cd /opt/mineraai && git pull         # atualizar para a versão mais nova
 
 - [ ] `curl https://seu-dominio.com.br/api/status` responde `modo: híbrido`
 - [ ] Dashboard abre no navegador
-- [ ] Teste de conexão n8n retorna ok
-- [ ] Um job da Fábrica de Vídeos chega ao webhook do n8n
+- [ ] `GET /api/integrations` lista os 13 cards e o `.env` foi carregado
+- [ ] Teste individual de cada integração retorna ok (ou explica o que falta)
+- [ ] Um job da Fábrica com `mode: "sync"` devolve o MP4 (requer RunPod)
+- [ ] `.venv/bin/python -m server.tests_unified` e `-m server.tests_integracoes` passam na VPS
