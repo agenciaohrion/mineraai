@@ -64,6 +64,13 @@ Consumidores: endpoints REST, Research Agents, API pública e MCP. Nenhum deles
 fala com `providers.py`, `virlo.py` ou `mining.py` diretamente. A troca de fonte é
 uma decisão de `research.py`, não do consumidor.
 
+**Isolamento de origem:** `search_videos(..., source=...)` aceita `oficial`,
+`virlo`, `mineracao` ou `demo`. Em `all` vale a ordem de confiança acima; isolando
+uma camada o demo não entra como reserva — a lista volta vazia com o motivo em
+`errors`. É o que permite responder "este número é real?" sem ambiguidade.
+As facetas (hashtags, sons, criadores) são calculadas **dos vídeos devolvidos**,
+não do gerador demo — antes elas podiam descrever um conjunto que não era o exibido.
+
 **Por que existe a camada:** cada fonte tem custo e formato próprios — YouTube Data
 é grátis e cota limitada, a Virlo é paga por chamada (US$ 0,50) e a mineração
 própria custa CPU do servidor. Concentrar a escolha num único módulo permite

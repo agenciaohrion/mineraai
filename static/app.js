@@ -323,6 +323,13 @@ async function viewRadar() {
           <option value="likes">Likes</option><option value="engagement">Engajamento</option>
           <option value="recent">Mais recentes</option>
         </select>
+        <select id="radar-src" style="width:180px" title="Isola uma camada de dados. Em &quot;demonstração&quot; o resultado é simulado; em &quot;só oficial&quot; o demo nunca entra como reserva.">
+          <option value="all">Todas as origens</option>
+          <option value="oficial">Só oficial</option>
+          <option value="virlo">Só Virlo</option>
+          <option value="mineracao">Só mineração</option>
+          <option value="demo">Só demonstração</option>
+        </select>
         <button class="btn primary" id="radar-go">⚡ Garimpar</button>
       </div>
     </div>
@@ -345,16 +352,20 @@ async function runRadar(saved) {
   const q = $("#radar-q").value.trim() || "tendências";
   const params = new URLSearchParams({
     q, platform: $("#radar-pf").value, period: $("#radar-period").value,
-    sort: $("#radar-sort").value, limit: "12",
+    sort: $("#radar-sort").value, limit: "12", source: $("#radar-src").value,
   });
   state.lastSearch = { q };
   $("#radar-results").innerHTML = skeletonGrid(6);
   const data = await api("/search?" + params);
   const { source_breakdown: sb } = data;
   const real = (sb.oficial || 0) + (sb.virlo || 0) + (sb.ingestao || 0);
+  const SRC = { all: "todas as origens", oficial: "só oficial", virlo: "só Virlo",
+                mineracao: "só mineração", demo: "só demonstração" };
+  const srcAtiva = data.source || "all";
   $("#radar-summary").innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span class="badge gold">${data.total} vídeos encontrados</span>
+      ${srcAtiva !== "all" ? `<span class="badge ${srcAtiva === "demo" ? "gray" : "cyan"}">origem: ${SRC[srcAtiva] || srcAtiva}</span>` : ""}
       <span class="badge green">oficial: ${sb.oficial}</span>
       ${sb.virlo ? `<span class="badge violet">virlo: ${sb.virlo}</span>` : ""}
       ${sb.ingestao ? `<span class="badge gold">mineração: ${sb.ingestao}</span>` : ""}
@@ -364,7 +375,11 @@ async function runRadar(saved) {
     </div>`;
   $("#radar-results").innerHTML = data.videos.length
     ? `<div class="vid-grid">${data.videos.map(videoCard).join("")}</div>`
-    : `<div class="empty">Nenhum resultado. Tente outro termo.</div>`;
+    : `<div class="empty">${srcAtiva === "all"
+        ? "Nenhum resultado. Tente outro termo."
+        : `Nenhum vídeo em <b>${SRC[srcAtiva] || srcAtiva}</b> para este termo.
+           A origem foi isolada a pedido — o demo não entra como reserva.
+           <br><span class="link-gold" onclick="$('#radar-src').value='all'; runRadar();">buscar em todas as origens</span>`}</div>`;
   $("#radar-tags").innerHTML = data.top_hashtags.map(t => `
     <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--line-soft);font-size:13px">
       <b style="color:var(--cyan)">${esc(t.tag)}</b><span class="num">${fmtNum(t.reach)}</span></div>`).join("") || "—";
@@ -1683,13 +1698,15 @@ window.meliAuthorize = async () => {
   if (!r.ok) return toast(r.message, true);
   window.open(r.url, "_blank", "noopener");
   openModal(`<h2>🔗 Autorizar Mercado Livre</h2>
-    <p style="color:var(--muted);font-size:13px">1. Autorize na aba que abriu.<br>
-    2. Copie o <code>code</code> da URL de retorno.<br>
-    3. Cole abaixo para concluir a troca por tokens.</p>
-    <div class="code-line">${esc(r.redirect_uri)}</div>
-    <div class="field" style="margin-top:12px"><label>Código (code)</label>
+    <p style="color:var(--muted);font-size:13px">Autorize na aba que abriu: ao voltar,
+    o servidor troca o código pelos tokens sozinho e a lista de cards se atualiza.
+    <br><br><b>Se a aba não voltar para este servidor</b> (redirect apontando para
+    outro domínio), copie o <code>code</code> da URL e cole abaixo.</p>
+    <div class="code-line">redirect_uri: ${esc(r.redirect_uri)}</div>
+    <div class="field" style="margin-top:12px"><label>Código (code) — opcional</label>
       <input id="meli-code" placeholder="TG-xxxxxxxx" /></div>
-    <button class="btn primary" onclick="meliExchange()">Concluir autorização</button>`);
+    <button class="btn primary" onclick="meliExchange()">Concluir com o código</button>
+    <button class="btn ghost" onclick="closeModal(); viewApis()">Já autorizei — atualizar</button>`);
 };
 
 window.meliExchange = async () => {

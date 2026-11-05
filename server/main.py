@@ -16,7 +16,8 @@ from typing import Optional
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -85,14 +86,23 @@ async def status():
 @app.get("/api/search")
 async def search(q: str = "tendências", platform: str = "all", period: str = "30d",
                  sort: str = "viral_score", min_views: int = 0, limit: int = 14,
+                 source: str = "all", include_demo: bool = True,
                  tenant: dict = Depends(current_tenant)):
-    """Radar Viral — busca unificada (oficial → Virlo → mineração → demo)."""
-    credits.charge(tenant["id"], "search", meta={"q": q, "platform": platform})
+    """Radar Viral — busca unificada (oficial → Virlo → mineração → demo).
+
+    `source` isola uma camada: `oficial`, `virlo`, `mineracao` ou `demo`.
+    Com `include_demo=false` o demo nunca entra como reserva — útil para quem
+    paga por cobertura real e não quer número estimado misturado no relatório.
+    """
+    credits.charge(tenant["id"], "search", meta={"q": q, "platform": platform,
+                                                 "source": source})
     limit = max(3, min(limit, 30))
-    data = await research.search_videos(q, platform, period, min_views, limit)
+    data = await research.search_videos(q, platform, period, min_views, limit,
+                                        include_demo=include_demo, source=source)
     videos = research.sort_videos(data["videos"], sort)
     return {
         "query": q, "period": data["period"], "sort": sort,
+        "source": data["source"], "include_demo": include_demo,
         "source_breakdown": data["source_breakdown"],
         "errors": data["errors"],
         "coleta_errors": data["errors"],
@@ -727,8 +737,69 @@ class MeliCallbackIn(BaseModel):
 
 @app.post("/api/integrations/meli/callback")
 async def meli_callback(body: MeliCallbackIn):
-    """Troca o ?code do redirect pelo par access/refresh token e persiste."""
+    """Troca o ?code do redirect pelo par access/refresh token e persiste.
+
+    Versão POST: usada pelo diálogo do app quando o redirect não volta para cá
+    (ex.: redirect_uri apontando para outra máquina) e o usuário cola o `code`.
+    """
     return await asyncio.to_thread(free_sources.meli_exchange_code, body.code)
+
+
+def _meli_page(ok: bool, mensagem: str) -> str:
+    """Página mínima de retorno do OAuth — sem SPA, sem dependência externa."""
+    cor = "#22c55e" if ok else "#ef4444"
+    icone = "✔" if ok else "✖"
+    titulo = "Mercado Livre autorizado" if ok else "Falha na autorização"
+    return f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{titulo} · MineraAI</title>
+{'<meta http-equiv="refresh" content="2;url=/#/apis" />' if ok else ''}
+<style>
+  body {{ margin:0; min-height:100vh; display:grid; place-items:center;
+          background:#0b0f17; color:#e7ecf3;
+          font:15px/1.6 system-ui,-apple-system,Segoe UI,sans-serif; }}
+  .box {{ max-width:520px; padding:32px 28px; border:1px solid #1e293b;
+          border-radius:16px; background:#0f1622; text-align:center; }}
+  .ico {{ font-size:34px; color:{cor}; }}
+  h1 {{ font-size:19px; margin:14px 0 8px; }}
+  p {{ color:#94a3b8; margin:0 0 18px; }}
+  a {{ display:inline-block; padding:10px 18px; border-radius:10px;
+       background:#f59e0b; color:#111; font-weight:600; text-decoration:none; }}
+</style></head><body><div class="box">
+  <div class="ico">{icone}</div>
+  <h1>{titulo}</h1>
+  <p>{mensagem}</p>
+  <a href="/#/apis">Voltar para APIs &amp; Conexões</a>
+</div></body></html>"""
+
+
+@app.get("/api/integrations/meli/callback", response_class=HTMLResponse)
+async def meli_callback_get(code: str = "", state: str = "",
+                            error: str = "", error_description: str = ""):
+    """Recebe o redirect do Mercado Livre (GET) e conclui o OAuth.
+
+    A Mercado Livre devolve o navegador do usuário para esta URL com `?code=…`,
+    então esta rota **não pode exigir autenticação** — não é um cliente da API
+    chegando, é o navegador. A troca do `code` é feita no servidor e o usuário
+    volta para a tela de integrações já com os tokens salvos.
+    """
+    if error or not code:
+        motivo = error_description or error or (
+            "O Mercado Livre não devolveu o código de autorização. "
+            "Tente autorizar novamente pelo botão no app.")
+        return HTMLResponse(_meli_page(False, motivo), status_code=400)
+
+    res = await asyncio.to_thread(free_sources.meli_exchange_code, code)
+    if not res.get("ok"):
+        return HTMLResponse(
+            _meli_page(False, res.get("message") or "Não foi possível trocar o código."),
+            status_code=400)
+    expira = res.get("expires_in")
+    detalhe = (f"Tokens salvos neste servidor (access token válido por "
+               f"{int(expira) // 3600}h, renovado automaticamente)."
+               if expira else "Tokens salvos neste servidor.")
+    return HTMLResponse(_meli_page(True, detalhe))
 
 
 @app.post("/api/integrations/meli/refresh")

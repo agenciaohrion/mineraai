@@ -166,26 +166,83 @@ async def collect_virlo(q: str, platform: str, limit: int) -> tuple[list[dict], 
 
 
 # ------------------------------------------------------------------ busca
+#: Origens que a busca pode isolar. `all` = todas, na ordem de confiança.
+SOURCES = ("all", "oficial", "virlo", "mineracao", "demo")
+
+#: Rótulos usados na UI e na mensagem de erro de origem inválida.
+SOURCE_LABELS = {"oficial": "APIs oficiais", "virlo": "Virlo API",
+                 "mineracao": "mineração própria", "demo": "demonstração",
+                 "all": "todas as origens"}
+
+
+def facets_from(videos: list[dict]) -> dict:
+    """Hashtags, sons e criadores calculados a partir dos vídeos que voltaram.
+
+    Antes as facetas vinham sempre do gerador demo — ou seja, a lista de
+    "hashtags dominantes" podia não ter nada a ver com os vídeos exibidos.
+    Agora saem do próprio resultado; o demo só entra quando não há nenhum vídeo.
+    """
+    tags: dict[str, int] = {}
+    sons: dict[str, int] = {}
+    criadores: dict[str, dict] = {}
+    for v in videos:
+        views = int(v.get("views") or 0)
+        for h in (v.get("hashtags") or []):
+            tags[h] = tags.get(h, 0) + views
+        som = v.get("sound")
+        if som:
+            sons[som] = sons.get(som, 0) + views
+        handle = v.get("handle")
+        if handle:
+            c = criadores.setdefault(handle, {"videos": 0, "views": 0})
+            c["videos"] += 1
+            c["views"] += views
+    return {
+        "top_hashtags": [{"tag": k, "reach": n} for k, n in
+                         sorted(tags.items(), key=lambda x: -x[1])[:8]],
+        "top_sounds": [{"sound": k, "reach": n} for k, n in
+                       sorted(sons.items(), key=lambda x: -x[1])[:6]],
+        "top_creators": [{"handle": k, **v} for k, v in
+                         sorted(criadores.items(), key=lambda x: -x[1]["views"])[:8]],
+    }
+
+
 async def search_videos(q: str = "tendências", platform: str = "all",
                         period: str = "30d", min_views: int = 0,
-                        limit: int = 14, include_demo: bool = True) -> dict:
-    """Busca unificada: oficial → Virlo → mineração/ingestão → demo."""
+                        limit: int = 14, include_demo: bool = True,
+                        source: str = "all") -> dict:
+    """Busca unificada: oficial → Virlo → mineração/ingestão → demo.
+
+    `source` isola uma camada (`oficial`, `virlo`, `mineracao`, `demo`) para
+    quem precisa de garantia — auditoria, cliente que contratou cobertura paga
+    ou teste de integração. `all` mantém o comportamento de sempre: todas as
+    camadas, na ordem de confiança, com o demo só como último recurso.
+    """
     platform = platform if platform in PLATFORMS else "all"
     period = period if period in PERIODS else "30d"
+    source = source if source in SOURCES else "all"
     plats = ALL_PLATFORMS if platform == "all" else [platform]
     limit = max(1, min(int(limit), 60))
 
+    quer_oficial = source in ("all", "oficial")
+    quer_virlo = source in ("all", "virlo")
+    quer_mineracao = source in ("all", "mineracao")
+    quer_demo = source == "demo" or (source == "all" and include_demo)
+
     demo_set = demo.search_aggregate(q, plats, period, min_views, limit)
 
-    oficial, erros = await collect_official(q, plats, limit)
-    do_virlo, erros_virlo = await collect_virlo(q, platform, limit)
-    erros += erros_virlo
+    oficial, erros = (await collect_official(q, plats, limit)) if quer_oficial else ([], [])
+    if quer_virlo:
+        do_virlo, erros_virlo = await collect_virlo(q, platform, limit)
+        erros += erros_virlo
+    else:
+        do_virlo = []
 
-    mineirados = mining.mined_for_query(q)
-    ingeridos = mining.ingested_for_query(q)
+    mineirados = mining.mined_for_query(q) if quer_mineracao else []
+    ingeridos = mining.ingested_for_query(q) if quer_mineracao else []
 
     raw = list(oficial) + list(do_virlo) + list(mineirados) + list(ingeridos)
-    if include_demo:
+    if quer_demo:
         raw += demo_set["videos"]
 
     unificados = [v if v.get("uid") else schema.normalize_video(v, v.get("platform", "tiktok"))
@@ -196,20 +253,31 @@ async def search_videos(q: str = "tendências", platform: str = "all",
         videos = [v for v in videos if int(v.get("views") or 0) >= min_views]
 
     videos = metrics.enrich_videos(videos)
+
+    # facetas do resultado real; do demo só quando não há nenhum vídeo de fonte viva
+    facets = facets_from([v for v in videos if v.get("source") != "demo"])
+    if not (facets["top_hashtags"] or facets["top_sounds"] or facets["top_creators"]):
+        facets = {k: demo_set[k] for k in ("top_hashtags", "top_sounds", "top_creators")}
+
+    mineracao = sum(1 for v in videos if v["source"] in ("ingestao", "mineracao", "n8n"))
+    breakdown = {
+        "oficial": sum(1 for v in videos if v["source"] in ("oficial", "api")),
+        "virlo": sum(1 for v in videos if v["source"] == "virlo"),
+        "ingestao": mineracao,
+        "mineracao": mineracao,
+        "demo": sum(1 for v in videos if v["source"] == "demo"),
+    }
+
+    if source != "all" and not videos:
+        erros.append(f"Nenhum vídeo em {SOURCE_LABELS[source]} para \"{q}\" — "
+                     "a origem foi isolada a pedido, o demo não entra como reserva.")
+
     return {
         "query": q, "period": period, "platform": platform,
+        "source": source,
         "videos": videos,
-        "facets": {
-            "top_hashtags": demo_set["top_hashtags"],
-            "top_sounds": demo_set["top_sounds"],
-            "top_creators": demo_set["top_creators"],
-        },
-        "source_breakdown": {
-            "oficial": sum(1 for v in videos if v["source"] in ("oficial", "api")),
-            "virlo": sum(1 for v in videos if v["source"] == "virlo"),
-            "ingestao": sum(1 for v in videos if v["source"] in ("ingestao", "n8n", "mineracao")),
-            "demo": sum(1 for v in videos if v["source"] == "demo"),
-        },
+        "facets": facets,
+        "source_breakdown": breakdown,
         "errors": erros,
         "coleta_errors": erros,   # compatibilidade com a UI antiga
     }
@@ -233,7 +301,7 @@ def sort_videos(videos: list[dict], sort: str) -> list[dict]:
 # ------------------------------------------------------------------ outliers
 async def find_outliers(q: str = "tendências", platform: str = "all",
                         period: str = "30d", limit: int = 12,
-                        min_score: int = 30) -> dict:
+                        min_score: int = 30, source: str = "all") -> dict:
     """Detecta vídeos furando a curva do criador/nicho.
 
     Corpus 3x maior que o pedido porque baseline precisa de contexto. Se a Virlo
@@ -242,7 +310,7 @@ async def find_outliers(q: str = "tendências", platform: str = "all",
     funcionar com qualquer fonte.
     """
     limit = max(3, min(int(limit), 30))
-    corpus = await search_videos(q, platform, period, 0, limit * 3)
+    corpus = await search_videos(q, platform, period, 0, limit * 3, source=source)
     videos = corpus["videos"]
 
     outliers = [v for v in videos if v.get("outlier_score", 0) >= min_score]
