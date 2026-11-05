@@ -1,0 +1,21 @@
+# /etc/systemd/system/mineraai.service
+# MineraAI rodando como serviço (inicia com o boot, reinicia se cair)
+[Unit]
+Description=MineraAI - Ecossistema de descoberta viral e criacao
+After=network.target
+
+[Service]
+Type=simple
+# Ajuste se o usuário for outro (ex.: root ou hermes)
+User=www-data
+WorkingDirectory=/opt/mineraai
+# O run.sh cria o venv, carrega o .env e sobe o uvicorn em 0.0.0.0:8000
+ExecStart=/opt/mineraai/run.sh
+Restart=always
+RestartSec=5
+# Variáveis extras podem ir aqui ou no .env do projeto
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+
+[Install]
+WantedBy=multi-user.target
