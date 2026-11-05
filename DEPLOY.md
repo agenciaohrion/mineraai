@@ -82,6 +82,9 @@ Nada de orquestrador externo: cada integração é chamada direto pelo servidor.
    (Developers → sua aplicação → Redirect URI):
    `https://seu-dominio.com.br/api/integrations/meli/callback`
    O valor exato aparece em `GET /api/integrations` (`meli_redirect_uri`).
+   Depois de autorizar, o Mercado Livre **devolve o navegador para essa URL**
+   e a troca do código acontece sozinha — o usuário cai numa página de retorno
+   que o leva de volta para a tela de integrações, já com os tokens salvos.
 4. Quem preferir `.env`: as chaves têm os mesmos nomes e são lidas no boot.
    O que for salvo pela UI tem prioridade sobre o arquivo.
 

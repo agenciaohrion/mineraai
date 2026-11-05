@@ -1,0 +1,71 @@
+name: CI
+
+# Roda a cada push (qualquer branch) e em todo PR para main.
+# Objetivo: ninguém mergear sem os testes passarem — inclusive quem só mexeu no
+# frontend, porque `node --check` também está aqui.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: Testes (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Camada unificada (métricas, schema, créditos, agentes)
+        run: python -m server.tests_unified
+
+      - name: Integrações (RunPod, Virlo, mineração e as 6 fontes)
+        run: python -m server.tests_integracoes
+
+      - name: O app importa e as rotas existem
+        run: |
+          python - <<'PY'
+          from server.main import app
+          rotas = [r.path for r in app.routes if getattr(r, "path", "").startswith("/api")]
+          print(f"{len(rotas)} rotas /api")
+          # rotas que não podem desaparecer numa refatoração
+          obrigatorias = [
+              "/api/search", "/api/outliers", "/api/status", "/api/integrations",
+              "/api/settings/test/{service}", "/api/fabrica/jobs",
+              "/api/runpod/health", "/api/virlo/balance", "/api/mining/orbits",
+              "/api/mining/comets", "/api/integrations/meli/callback",
+              "/api/integrations/reddit/token",
+          ]
+          faltando = [r for r in obrigatorias if r not in rotas]
+          assert not faltando, f"rotas ausentes: {faltando}"
+          print("todas as rotas obrigatórias presentes")
+          PY
+
+  frontend:
+    name: Frontend (sintaxe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Sintaxe do app.js
+        run: node --check static/app.js

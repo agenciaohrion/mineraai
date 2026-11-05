@@ -1,5 +1,7 @@
 # ⛏️ MineraAI — Ecossistema Unificado de Descoberta Viral, Commerce & Criação
 
+[![CI](https://github.com/agenciaohrion/mineraai/actions/workflows/ci.yml/badge.svg)](https://github.com/agenciaohrion/mineraai/actions/workflows/ci.yml)
+
 **v3 — integrações diretas.** Um único produto que cobre o que quatro ferramentas de
 mercado fazem separadamente, com o loop fechado que nenhuma delas tem:
 *descobrir → validar o produto → gerar o roteiro → produzir o vídeo → medir o resultado.*
@@ -46,9 +48,18 @@ exibe o selo da origem: `oficial` · `virlo` · `mineração` · `demo`.
   Basic auth e guarda o token (100 req/min em vez de 10 no endpoint público).
   Sem credencial, cai no JSON público automaticamente.
 - **Mercado Livre** — fluxo `authorization_code` completo:
-  `GET /api/integrations/meli/authorize` → usuário autoriza → `POST /api/integrations/meli/callback`
-  troca o `code` por `access_token` + `refresh_token`, e `POST /api/integrations/meli/refresh`
-  renova (o `meli_access_token()` renova sozinho quando faltam 5 minutos).
+  `GET /api/integrations/meli/authorize` → usuário autoriza → **o próprio Mercado Livre
+  devolve o navegador** em `GET /api/integrations/meli/callback?code=…`, que troca o
+  `code` por `access_token` + `refresh_token` e mostra uma página de retorno ao app.
+  Se o redirect apontar para outro domínio, o `code` pode ser colado no diálogo
+  (`POST` na mesma rota). `POST /api/integrations/meli/refresh` renova — e o
+  `meli_access_token()` renova sozinho quando faltam 5 minutos.
+
+O Radar tem **seletor de origem** (`Todas · Só oficial · Só Virlo · Só mineração ·
+Só demonstração`). Isolar uma camada serve para auditar e para quem paga por cobertura
+real: em `só oficial`, o demo **não entra como reserva** — a resposta volta vazia com
+explicação, em vez de número estimado disfarçado de oficial. API equivalente:
+`?source=oficial` e `?include_demo=false`.
 
 ### 📡 Fontes de dados em 4 camadas (cada item é rotulado)
 
@@ -155,6 +166,7 @@ data/              # Arquivos persistidos em runtime (gitignored)
 # descoberta
 GET  /api/status                                  # modo + conectividade por integração
 GET  /api/search?q=&platform=&period=&sort=&min_views=   # oficial → virlo → mineração → demo
+                 &source=all|oficial|virlo|mineracao|demo &include_demo=false
 GET  /api/outliers?q=&platform=&period=&min_score=
 GET  /api/trends?limit=                           # Google Trends BR em tempo real
 
@@ -188,6 +200,7 @@ GET  /api/me | /api/billing/usage | /api/billing/plans
 POST /api/billing/plan | /credits | /keys
 GET  /api/integrations                            # inventário: campos por fonte
 GET  /api/integrations/meli/authorize
+GET  /api/integrations/meli/callback              # retorno do OAuth (o navegador volta aqui)
 POST /api/integrations/reddit/token | /meli/callback | /meli/refresh
 GET/POST /api/settings
 POST /api/settings/test/{youtube|tiktok|instagram|openai|gemini|virlo|reddit|
@@ -208,6 +221,10 @@ Nenhum toca a rede: `httpx` é substituído por dublês, então dá para validar
 contrato (URL, auth, payload, tratamento de 401/404) sem gastar cota nem arriscar
 banimento. São a garantia de que a matemática do produto e as integrações
 continuam corretas depois de qualquer mudança.
+
+Os dois rodam no **GitHub Actions** a cada push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)),
+junto com `node --check static/app.js` e uma checagem de que as rotas obrigatórias
+continuam registradas — refatoração que apaga endpoint quebra o build.
 
 ## 📚 Documentação
 

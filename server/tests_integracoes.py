@@ -496,6 +496,138 @@ def test_pexels_sem_chave():
     print("ok pexels: mensagem clara sem chave")
 
 
+
+# ================================================================ busca por origem
+def _video_fake(uid: str, source: str, views: int = 1000) -> dict:
+    return {"uid": uid, "platform": "tiktok", "title": f"vídeo {uid}",
+            "handle": "@criador", "views": views, "likes": 10, "comments": 1,
+            "shares": 0, "age_hours": 6, "hashtags": ["#teste"],
+            "sound": "som original", "source": source}
+
+
+def _com_coleta_fake(fn):
+    """Roda fn() com as camadas de coleta trocadas por respostas fixas."""
+    from server import research
+
+    orig = (research.collect_official, research.collect_virlo,
+            mining.mined_for_query, mining.ingested_for_query)
+
+    async def oficial(*a, **kw):
+        return [_video_fake("vid:tiktok:oficial", "oficial")], []
+
+    async def v(*a, **kw):
+        return [_video_fake("vid:tiktok:virlo", "virlo")], []
+
+    research.collect_official = oficial
+    research.collect_virlo = v
+    mining.mined_for_query = lambda q: [_video_fake("vid:tiktok:mineirado", "mineracao")]
+    mining.ingested_for_query = lambda q: []
+    try:
+        return fn(research)
+    finally:
+        (research.collect_official, research.collect_virlo,
+         mining.mined_for_query, mining.ingested_for_query) = orig
+
+
+def test_busca_isola_origem():
+    def roda(research):
+        out = {}
+        for src in ("oficial", "virlo", "mineracao", "demo", "all"):
+            out[src] = asyncio.run(research.search_videos("teste", "tiktok", "30d",
+                                                          0, 5, source=src))
+        return out
+
+    res = _com_coleta_fake(roda)
+
+    assert res["oficial"]["source"] == "oficial"
+    assert [v["source"] for v in res["oficial"]["videos"]] == ["oficial"]
+    assert res["oficial"]["source_breakdown"]["demo"] == 0
+
+    assert [v["source"] for v in res["virlo"]["videos"]] == ["virlo"]
+    assert [v["source"] for v in res["mineracao"]["videos"]] == ["mineracao"]
+
+    demo = res["demo"]["videos"]
+    assert demo and all(v["source"] == "demo" for v in demo)
+
+    todas = {v["source"] for v in res["all"]["videos"]}
+    assert {"oficial", "virlo", "mineracao"} <= todas
+    assert "demo" in todas
+    print("ok busca: source isola oficial/virlo/mineração/demo")
+
+
+def test_busca_sem_demo():
+    def roda(research):
+        return asyncio.run(research.search_videos("teste", "tiktok", "30d", 0, 5,
+                                                  include_demo=False))
+
+    res = _com_coleta_fake(roda)
+    assert res["videos"], "deveria trazer as fontes reais"
+    assert all(v["source"] != "demo" for v in res["videos"])
+    assert res["source_breakdown"]["demo"] == 0
+    print("ok busca: include_demo=false nunca mistura simulado")
+
+
+def test_busca_origem_vazia_avisa():
+    from server import research
+    orig = research.collect_official
+
+    async def vazio(*a, **kw):
+        return [], []
+
+    research.collect_official = vazio
+    try:
+        res = asyncio.run(research.search_videos("teste", "tiktok", "30d", 0, 5,
+                                                 source="oficial"))
+    finally:
+        research.collect_official = orig
+    assert res["videos"] == []
+    assert any("isolada a pedido" in e for e in res["errors"]), res["errors"]
+    print("ok busca: origem isolada e vazia explica em vez de cair no demo")
+
+
+def test_facetas_vem_do_resultado():
+    from server import research
+    videos = [_video_fake("vid:tiktok:a", "oficial", 5000),
+              _video_fake("vid:tiktok:b", "oficial", 1000)]
+    f = research.facets_from(videos)
+    assert f["top_hashtags"][0]["tag"] == "#teste"
+    assert f["top_hashtags"][0]["reach"] == 6000
+    assert f["top_creators"][0]["handle"] == "@criador"
+    assert f["top_creators"][0]["videos"] == 2
+    print("ok facetas: calculadas dos vídeos exibidos")
+
+
+# ================================================================ OAuth Meli (GET)
+def test_meli_callback_get_autoriza():
+    from server import main as srv
+    _settings(MELI_CLIENT_ID="meli_id", MELI_CLIENT_SECRET="meli_secret")
+    FakeClient.resposta = FakeResponse(200, {
+        "access_token": "APP_USR-ok", "refresh_token": "TG-r", "expires_in": 21600})
+    with cenário():
+        resp = asyncio.run(srv.meli_callback_get(code="TG-abc"))
+    assert resp.status_code == 200
+    corpo = resp.body.decode()
+    assert "autorizado" in corpo.lower()
+    assert "/#/apis" in corpo
+    assert storage.settings_get()["MELI_ACCESS_TOKEN"] == "APP_USR-ok"
+    print("ok oauth: GET de retorno do Mercado Livre conclui e volta pro app")
+
+
+def test_meli_callback_get_erro():
+    from server import main as srv
+    FakeClient.chamadas = []
+    resp = asyncio.run(srv.meli_callback_get(code="", error="access_denied",
+                                             error_description="Usuário recusou"))
+    assert resp.status_code == 400
+    corpo = resp.body.decode()
+    assert "Usuário recusou" in corpo
+    assert "/#/apis" in corpo
+    # sem code e sem erro → mensagem clara, não stacktrace
+    resp2 = asyncio.run(srv.meli_callback_get())
+    assert resp2.status_code == 400
+    print("ok oauth: erro de autorização vira página legível, sem 500")
+
+
 if __name__ == "__main__":
     test_runpod_config_e_payload()
     test_runpod_aplica_template()
@@ -519,4 +651,10 @@ if __name__ == "__main__":
     test_trends_parse()
     test_suggest_e_oembed()
     test_pexels_sem_chave()
+    test_busca_isola_origem()
+    test_busca_sem_demo()
+    test_busca_origem_vazia_avisa()
+    test_facetas_vem_do_resultado()
+    test_meli_callback_get_autoriza()
+    test_meli_callback_get_erro()
     print("\nTODOS OS TESTES DE INTEGRAÇÃO PASSARAM ✔")
