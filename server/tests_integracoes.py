@@ -3,16 +3,36 @@
 Sem rede: todo `httpx` é substituído por dublês. Rodar com:
 
     .venv/bin/python -m server.tests_integracoes
+
+Os testes escrevem chaves falsas e jobs de teste. Para não contaminar o runtime
+da aplicação (que exibiria "conectado" com credencial inventada), tudo vai para
+um diretório temporário descartado no fim — nunca para `data/`.
 """
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
+import shutil
+import tempfile
 import time
+from pathlib import Path
 
 import httpx
 
-from server import free_sources, metrics, mining, runpod, schema, storage, virlo
+from server import free_sources, metrics, mining, pipeline, runpod, schema, storage, virlo
+
+# --------------------------------------------------- isolamento do estado em disco
+_TMP = Path(tempfile.mkdtemp(prefix="mineraai-tests-"))
+atexit.register(shutil.rmtree, _TMP, True)
+
+storage.DATA_DIR = _TMP
+storage.SETTINGS_FILE = _TMP / "settings.json"
+mining.DATA_DIR = _TMP
+mining.ORBITS_FILE = _TMP / "orbits.json"
+mining.COMETS_FILE = _TMP / "comets.json"
+mining.INGEST_FILE = _TMP / "ingested.json"
+pipeline.JOBS_FILE = _TMP / "jobs.json"
 
 
 # ================================================================ dublês HTTP
