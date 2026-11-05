@@ -2,7 +2,7 @@
 
 Centraliza TODA a matemática do produto. Nenhum endpoint calcula score na mão:
 tudo passa por aqui, para que o mesmo vídeo tenha sempre o mesmo número,
-venha ele da API oficial, da coleta pública, do n8n ou do modo demonstração.
+venha ele da API oficial, da Virlo, da mineração própria ou do modo demonstração.
 
 Conceitos-chave (os diferenciais dos apps que estamos unificando):
 

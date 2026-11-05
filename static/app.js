@@ -166,7 +166,7 @@ function videoCard(v) {
     <div class="vid-body">
       <div class="vid-title">${esc(v.title)}</div>
       <div class="vid-author">${esc(v.handle || v.author)} · ${timeAgoH(v.age_hours)}
-        <span class="src-badge src-${v.source}">${{ oficial: "oficial", coleta: "coleta real", n8n: "n8n automação", demo: "demo" }[v.source] || v.source}</span></div>
+        <span class="src-badge src-${v.source}">${{ oficial: "oficial", api: "oficial", virlo: "virlo", ingestao: "mineração", mineracao: "mineração", demo: "demo" }[v.source] || v.source}</span></div>
       <div class="vid-metrics">
         <span>👁 <b>${fmtNum(v.views)}</b></span>
         <span>❤ <b>${fmtNum(v.likes)}</b></span>
@@ -194,6 +194,7 @@ const routes = {
   radar: viewRadar,
   outliers: viewOutliers,
   agents: viewAgents,
+  mineracao: viewMineracao,
   billing: viewBilling,
   lojas: viewLojas,
   produtos: viewProdutos,
@@ -350,16 +351,16 @@ async function runRadar(saved) {
   $("#radar-results").innerHTML = skeletonGrid(6);
   const data = await api("/search?" + params);
   const { source_breakdown: sb } = data;
-  const real = sb.oficial + sb.coleta;
+  const real = (sb.oficial || 0) + (sb.virlo || 0) + (sb.ingestao || 0);
   $("#radar-summary").innerHTML = `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span class="badge gold">${data.total} vídeos encontrados</span>
       <span class="badge green">oficial: ${sb.oficial}</span>
-      <span class="badge cyan">coleta real: ${sb.coleta}</span>
-      ${sb.n8n ? `<span class="badge gold">n8n: ${sb.n8n}</span>` : ""}
+      ${sb.virlo ? `<span class="badge violet">virlo: ${sb.virlo}</span>` : ""}
+      ${sb.ingestao ? `<span class="badge gold">mineração: ${sb.ingestao}</span>` : ""}
       <span class="badge violet">demo: ${sb.demo}</span>
-      ${(data.coleta_errors || []).length ? `<span class="badge gray" title="${esc(data.coleta_errors.join(" · "))}">⚠ coleta parcial</span>` : ""}
-      ${real === 0 ? '<small style="color:var(--muted)">— conecte chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span> ou verifique a coleta Scrapling</small>' : ""}
+      ${(data.errors || []).length ? `<span class="badge gray" title="${esc((data.errors || []).join(" · "))}">⚠ fontes com erro</span>` : ""}
+      ${real === 0 ? '<small style="color:var(--muted)">— conecte chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span>, ligue a Virlo ou minere um Orbit</small>' : ""}
     </div>`;
   $("#radar-results").innerHTML = data.videos.length
     ? `<div class="vid-grid">${data.videos.map(videoCard).join("")}</div>`
@@ -887,7 +888,7 @@ function tabVoice() {
 // ============================================================ FÁBRICA DE VÍDEOS
 const JOB_STATUS = {
   fila: ["⏳", "Fila", "status-fila"],
-  enviado: ["📡", "Enviado ao n8n", "status-enviado"],
+  enviado: ["📡", "Enviado ao RunPod", "status-enviado"],
   processando: ["🎞️", "Renderizando (RunPod)", "status-processando"],
   pronto: ["✅", "Pronto", "status-pronto"],
   erro: ["⚠️", "Erro", "status-erro"],
@@ -899,9 +900,8 @@ async function viewFabrica() {
   $("#view").innerHTML = `
     <div class="page-head"><div>
       <h1>Fábrica de Vídeos 🎬</h1>
-      <p>Produção automatizada: o job vai para o <b>n8n</b>, que orquestra modelos de vídeo
-      no <b>ComfyUI (RunPod serverless)</b> e devolve o MP4 aqui. Configure o webhook em
-      <span class="link-gold" onclick="location.hash='#/apis'">APIs & Conexões</span>.</p>
+      <p><b>RunPod direto</b>: o MineraAI chama o endpoint serverless do ComfyUI sem
+      n8n no meio — uma requisição, sem webhook, sem callback.</p>
     </div></div>
     <div class="grid cols-2">
       <div class="card">
@@ -917,31 +917,38 @@ async function viewFabrica() {
               <option value="cinematic">Cinematográfico</option>
               <option value="ugc">UGC (criador)</option>
               <option value="produto">Showcase de produto</option>
-              <option value="anime">Anime / ilustrado</option>
             </select></div>
           <div class="field grow"><label>Duração (s)</label>
             <input id="fab-dur" type="number" value="6" min="2" max="60" /></div>
+          <div class="field grow"><label>Modalidade</label>
+            <select id="fab-mode">
+              <option value="sync">Sync — espera o resultado</option>
+              <option value="async">Async — fila + polling</option>
+            </select></div>
         </div>
         <div class="form-row">
-          <button class="btn primary" id="fab-go">🚀 Enviar para produção</button>
+          <button class="btn primary" id="fab-go">🚀 Renderizar no RunPod</button>
           <button class="btn" id="fab-broll">🎞️ Buscar B-roll (Pexels)</button>
+          <button class="btn ghost" id="fab-health">🩺 Health do endpoint</button>
         </div>
         <div id="fab-broll-out" style="margin-top:12px"></div>
+        <div id="fab-health-out" style="margin-top:12px"></div>
       </div>
       <div class="card">
-        <h3>Como funciona o pipeline</h3>
-        <div style="font-size:13px;line-height:1.9;color:var(--muted)">
-          <b style="color:var(--text)">1.</b> MineraAI cria o job e chama o webhook do n8n<br>
-          <b style="color:var(--text)">2.</b> n8n monta o workflow e envia ao endpoint ComfyUI no RunPod<br>
-          <b style="color:var(--text)">3.</b> GPU renderiza (paga só os segundos usados)<br>
-          <b style="color:var(--text)">4.</b> n8n salva o MP4 (R2/Supabase) e chama o callback<br>
-          <b style="color:var(--text)">5.</b> O vídeo aparece aqui com custo e player<br><br>
-          📦 Importe os workflows prontos em <code>n8n/</code> no repositório.
+        <h3>Conexão RunPod</h3>
+        <div id="fab-runpod">…</div>
+        <div style="font-size:13px;line-height:1.9;color:var(--muted);margin-top:12px">
+          <b style="color:var(--text)">1.</b> MineraAI monta o grafo ComfyUI (template salvo ou padrão)<br>
+          <b style="color:var(--text)">2.</b> <code>POST /v2/{endpoint}/runsync</code> ou <code>/run</code><br>
+          <b style="color:var(--text)">3.</b> A GPU renderiza e devolve a URL do MP4<br>
+          <b style="color:var(--text)">4.</b> Custo estimado por GPU-segundo (delay + execução)<br>
+          <b style="color:var(--text)">5.</b> Nada de webhook/callback — o dado volta na resposta
         </div>
       </div>
     </div>
     <div class="section-title">Fila de produção <button class="btn small" onclick="loadJobs()">↻ Atualizar</button></div>
     <div class="card"><div id="fab-jobs">…</div></div>`;
+
   $("#fab-go").onclick = createJob;
   $("#fab-broll").onclick = async () => {
     const q = $("#fab-product").value.trim() || "produto";
@@ -955,7 +962,35 @@ async function viewFabrica() {
             <small style="color:var(--faint)">${b.duration || ""}s · ${esc(b.user)}</small></a>`).join("")}</div>`
       : `<small style="color:var(--faint)">${esc(r.message)}</small>`;
   };
+  $("#fab-health").onclick = async () => {
+    $("#fab-health-out").innerHTML = `<small style="color:var(--muted)">Consultando…</small>`;
+    const h = await api("/runpod/health");
+    $("#fab-health-out").innerHTML = h.ok
+      ? `<span class="badge green">workers prontos: ${h.workers.prontos}</span>
+         <span class="badge gold">fila: ${h.fila.na_fila}</span>
+         <span class="badge violet">executando: ${h.fila.em_execucao}</span>`
+      : `<span class="badge red">${esc(h.message || "RunPod indisponível")}</span>`;
+  };
+  loadRunpodCard();
   loadJobs();
+}
+
+async function loadRunpodCard() {
+  const el = $("#fab-runpod");
+  if (!el) return;
+  try {
+    const w = await api("/runpod/workflow");
+    const st = await api("/status");
+    const rp = st.providers.runpod || {};
+    el.innerHTML = `
+      <div class="kv"><span>Endpoint</span><b>${esc(rp.endpoint_id || "não configurado")}</b></div>
+      <div class="kv"><span>Status</span>
+        <span class="badge ${rp.conectado ? "green" : "gray"}">${rp.conectado ? "● conectado" : "○ desconectado"}</span></div>
+      <div class="kv"><span>Workflow</span><b>${esc(w.fonte)}</b></div>
+      <div class="kv"><span>GPU</span><b>US$ ${Number(w.custo_gpu_hora).toFixed(2)}/h</b></div>
+      ${rp.conectado ? "" : `<small style="color:var(--gold);display:block;margin-top:8px">
+        Configure API key e endpoint id em <span class="link-gold" onclick="location.hash='#/apis'">APIs & Conexões</span>.</small>`}`;
+  } catch { el.innerHTML = `<small style="color:var(--faint)">—</small>`; }
 }
 
 async function createJob() {
@@ -966,13 +1001,17 @@ async function createJob() {
     prompt: $("#fab-prompt").value.trim(),
     style: $("#fab-style").value,
     duration: +$("#fab-dur").value || 6,
+    mode: $("#fab-mode").value,
   };
-  const r = await api("/fabrica/jobs", { method: "POST", body });
-  const st = r.job.status;
-  toast(st === "enviado" ? "Job enviado ao n8n 🚀"
-    : st === "erro" ? "n8n inacessível — configure o webhook"
-    : "Job na fila — configure o webhook do n8n para disparar");
-  loadJobs();
+  try {
+    const r = await api("/fabrica/jobs", { method: "POST", body });
+    const st = r.job.status;
+    toast(st === "pronto" ? "Vídeo renderizado ✔"
+      : st === "processando" ? "Job na fila do RunPod — use ↻ para acompanhar"
+      : st === "erro" ? (r.runpod_configurado ? "RunPod recusou o job" : "Configure o RunPod primeiro")
+      : "Job criado");
+    loadMe(); loadJobs();
+  } catch (e) { toast(e.message, true); }
 }
 window.createJob = createJob;
 
@@ -982,7 +1021,7 @@ async function loadJobs() {
   const data = await api("/fabrica/jobs");
   if (!data.jobs.length) {
     el.innerHTML = `<div class="empty">Nenhum job ainda — crie o primeiro vídeo ao lado.
-      ${data.webhook_configurado ? "" : "<br>⚠️ Webhook do n8n não configurado (aba APIs & Conexões)."}</div>`;
+      ${data.runpod_configurado ? "" : "<br>⚠️ RunPod não configurado (aba APIs & Conexões)."}</div>`;
     return;
   }
   el.innerHTML = `<table class="table">
@@ -990,23 +1029,35 @@ async function loadJobs() {
     <tbody>${data.jobs.map(j => {
       const [ico, lb, cls] = JOB_STATUS[j.status] || ["•", j.status, ""];
       return `<tr>
-        <td style="font-family:monospace;font-size:12px">${j.id}</td>
+        <td style="font-family:monospace;font-size:12px">${j.id}<br>
+          <small style="color:var(--faint)">${j.mode || "sync"}${j.runpod_job_id ? " · " + String(j.runpod_job_id).slice(0, 12) : ""}</small></td>
         <td><b>${esc(j.product)}</b><br><small style="color:var(--faint)">${j.created_at?.slice(0, 16).replace("T", " ")}</small></td>
         <td><span class="badge gray">${esc(j.style)} · ${j.duration}s</span></td>
         <td><span class="job-status ${cls}">${ico} ${lb}</span>
-          ${j.error ? `<br><small style="color:var(--red)">${esc(j.error)}</small>` : ""}</td>
+          ${j.error ? `<br><small style="color:var(--red)">${esc(j.error)}</small>` : ""}
+          ${j.execution_ms ? `<br><small style="color:var(--faint)">exec ${(j.execution_ms / 1000).toFixed(1)}s</small>` : ""}</td>
         <td class="num">${j.cost_usd != null ? "$" + Number(j.cost_usd).toFixed(4) : "—"}</td>
         <td style="white-space:nowrap">
+          ${j.status === "processando" && j.runpod_job_id
+            ? `<button class="btn small" onclick="pollJob('${j.id}')">↻ Consultar</button>` : ""}
           ${j.status === "pronto" && j.video_url
             ? `<button class="btn small primary" onclick="playJob(${jattr(j)})">▶ Assistir</button>` : ""}
           <button class="btn small danger" onclick="delJob('${j.id}')">✕</button>
         </td></tr>`;
     }).join("")}</tbody></table>`;
   if (data.jobs.some(j => ["fila", "enviado", "processando"].includes(j.status))) {
-    fabricaTimer = setTimeout(loadJobs, 7000);  // auto-refresh enquanto renderiza
+    fabricaTimer = setTimeout(loadJobs, 8000);
   }
 }
 window.loadJobs = loadJobs;
+
+window.pollJob = async (id) => {
+  try {
+    const r = await api(`/fabrica/jobs/${id}/poll`);
+    toast(`Status: ${r.job.status}`);
+    loadJobs();
+  } catch (e) { toast(e.message, true); }
+};
 
 window.playJob = (job) => openModal(`
   <h2>${esc(job.product)}</h2>
@@ -1325,7 +1376,7 @@ async function viewBilling() {
       <div class="card"><h3>Consumo por ação (14 dias)</h3><div id="bill-usage">…</div></div>
       <div class="card"><h3>Chaves de API</h3><div id="bill-keys">…</div>
         <div class="form-row" style="margin-top:10px">
-          <div class="grow"><input id="key-label" placeholder="nome da chave (ex: n8n produção)" /></div>
+          <div class="grow"><input id="key-label" placeholder="nome da chave (ex: integração externa)" /></div>
           <button class="btn primary small" id="key-new">+ Gerar chave</button>
         </div>
         <small style="color:var(--faint);display:block;margin-top:8px">
@@ -1503,119 +1554,352 @@ async function loadShops() {
 }
 
 // ============================================================ APIS & CONEXÕES
+const GRUPOS = {
+  plataformas: { titulo: "Plataformas oficiais", desc: "APIs oficiais das redes — dado primário." },
+  dados:       { titulo: "Dados pagos", desc: "Fonte de cobertura real sob demanda." },
+  ia:          { titulo: "Inteligência artificial", desc: "Cada provedor com a sua própria chave." },
+  fontes:      { titulo: "Fontes gratuitas", desc: "Uma credencial por fonte — nunca compartilhada." },
+  producao:    { titulo: "Produção de vídeo", desc: "RunPod serverless chamado direto pelo MineraAI." },
+};
+
+const EXTRA_ACOES = {
+  reddit: `<button class="btn small ghost" onclick="redditToken()">🔑 Emitir token OAuth</button>`,
+  mercadolivre: `<button class="btn small ghost" onclick="meliAuthorize()">🔗 Autorizar (OAuth)</button>
+                 <button class="btn small ghost" onclick="meliRefresh()">↻ Renovar token</button>`,
+  virlo: `<button class="btn small ghost" onclick="virloSaldo()">💰 Ver saldo</button>`,
+  runpod: `<button class="btn small ghost" onclick="runpodHealth()">🩺 Health</button>`,
+};
+
 async function viewApis() {
   $("#view").innerHTML = `
     <div class="page-head"><div>
       <h1>APIs & Conexões 🔌</h1>
-      <p>Arquitetura plugável: sem chaves, a plataforma roda em modo demonstração.
-      Conecte as APIs oficiais (todas gratuitas) para operar com dados reais.</p>
+      <p>Uma integração por card, com credencial, teste e custo próprios.
+      Nada é compartilhado entre fontes: se uma cair, as outras continuam.</p>
     </div></div>
-    <div id="api-cards" class="grid cols-2"></div>
-    <div class="section-title">💡 Outras opções de APIs que se encaixam (pesquisadas)</div>
-    <div class="card" id="alt-apis"></div>`;
+    <div id="api-tokens" class="card" style="display:none"></div>
+    <div id="api-body"><div class="empty">Carregando integrações…</div></div>`;
 
-  const st = await api("/status");
+  let inv;
+  try {
+    inv = await api("/integrations");
+  } catch (e) {
+    $("#api-body").innerHTML = `<div class="empty">Erro ao carregar: ${esc(e.message)}</div>`;
+    return;
+  }
   const cfg = await api("/settings");
-  const defs = [
-    { k: "youtube", icon: "▶", fields: [["YOUTUBE_API_KEY", "Chave da YouTube Data API v3", "password"]],
-      docs: "https://console.cloud.google.com/apis/library/youtube.googleapis.com",
-      how: "Google Cloud → crie um projeto → ative 'YouTube Data API v3' → Credenciais → Criar chave de API. Custo zero: 10.000 unidades/dia (1 busca = 100 unidades)." },
-    { k: "tiktok", icon: "♪", fields: [["TIKTOK_CLIENT_KEY", "Client Key (Research API)", "password"],
-      ["TIKTOK_CLIENT_SECRET", "Client Secret", "password"]],
-      docs: "https://developers.tiktok.com/products/research-api/",
-      how: "Oficial e gratuita, porém restrita: exige vínculo acadêmico/institucional e aprovação manual (pode levar semanas). Sem aprovação, o modo demo cobre o TikTok." },
-    { k: "instagram", icon: "◎", fields: [["IG_ACCESS_TOKEN", "Access token de longa duração", "password"],
-      ["IG_USER_ID", "ID da conta Instagram profissional", "text"]],
-      docs: "https://developers.facebook.com/docs/instagram-api",
-      how: "Meta for Developers → crie um app Business → adicione o produto Instagram → vincule uma conta Business/Creator a uma Página → gere token de longa duração. Busca por hashtag: limite oficial de 30 hashtags únicas a cada 7 dias." },
-    { k: "ia", icon: "✨", fields: [["GROQ_API_KEY", "Groq API key (opcional)", "password"],
-      ["GEMINI_API_KEY", "Gemini API key (opcional)", "password"]],
-      docs: "https://console.groq.com/keys",
-      how: "O motor interno de copywriting já é 100% gratuito. Groq (Llama) e Google Gemini possuem tiers gratuitos generosos para elevar a qualidade dos textos gerados." },
-    { k: "coleta", icon: "🕷️", fields: [],
-      docs: "https://github.com/D4Vinci/Scrapling",
-      how: "Sem chave nenhuma: o Scrapling (open source) coleta dados públicos reais das páginas de busca — YouTube direto, TikTok/Instagram quando acessíveis — com fingerprint TLS de Chrome. 1 requisição por busca, timeouts curtos. Desative abaixo se preferir apenas APIs oficiais + demo.",
-      extra: "toggle" },
-    { k: "fontes_gratuitas", icon: "🆓", fields: [["PEXELS_API_KEY", "Pexels API key (B-roll grátis, opcional)", "password"]],
-      docs: "https://www.pexels.com/api/",
-      how: "Sempre ativas e sem chave: Mercado Livre (produtos reais BR), Reddit (pauta viral), Google Suggest (demanda de busca), Google Trends (termos em alta) e oEmbed YouTube/TikTok (metadados reais de links). A chave Pexels libera B-roll gratuito na Fábrica de Vídeos.",
-      test: "fontes" },
-    { k: "automacao", icon: "🤖", fields: [["N8N_WEBHOOK_URL", "URL do webhook n8n (Fábrica de Vídeos)", "text"],
-      ["N8N_TOKEN", "Token de segurança do callback", "password"],
-      ["MINERAAI_PUBLIC_URL", "URL pública do MineraAI (p/ callbacks)", "text"]],
-      docs: "https://docs.n8n.io/",
-      how: "Cole aqui a URL do webhook do workflow 'Fábrica de Vídeos' (arquivos importáveis em n8n/ no repositório). O n8n orquestra o ComfyUI no RunPod serverless e devolve o MP4 via callback protegido pelo token. MINERAAI_PUBLIC_URL é o endereço que o n8n usa para chamar de volta.",
-      extra: "n8n" },
-  ];
 
-  $("#api-cards").innerHTML = defs.map(d => {
-    const s = st.providers[d.k];
-    return `<div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 style="margin:0"><span style="font-size:18px">${d.icon}</span> ${s.oficial}</h3>
-        <span class="badge ${s.conectado ? "green" : "gray"}">${s.conectado ? "● conectado" : "○ não conectado"}</span>
-      </div>
-      <small style="color:var(--muted)">${s.custo}</small>
-      <div style="margin-top:12px">${d.fields.map(([name, label, type]) => `
-        <div class="field" style="margin-bottom:8px"><label>${label}</label>
-        <input type="${type}" id="set-${name}" placeholder="${cfg.settings[name] ? "••• " + cfg.settings[name] + " (salvo)" : "colar aqui…"}" /></div>`).join("")}
-      </div>
-      ${d.extra === "toggle" ? `
-        <div class="form-row" style="margin-top:10px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
-            <input type="checkbox" id="set-SCRAPLING_ENABLED" style="width:auto" ${(cfg.settings.SCRAPLING_ENABLED ?? "1") !== "0" ? "checked" : ""} />
-            Coleta pública ativada (fonte: <span class="src-badge src-coleta">coleta real</span>)
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted)">
-            <input type="checkbox" id="set-SCRAPLING_STEALTHY" style="width:auto" ${(cfg.settings.SCRAPLING_STEALTHY ?? "0") === "1" ? "checked" : ""} />
-            Modo stealth (requer <code>scrapling install</code>)
-          </label>
-        </div>` : ""}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-        <button class="btn primary small" onclick="saveProvider('${d.k}', ${JSON.stringify(d.fields.map(f => f[0]).concat(d.extra === "toggle" ? ["SCRAPLING_ENABLED", "SCRAPLING_STEALTHY"] : []))})">💾 Salvar</button>
-        <button class="btn small" onclick="testProvider('${d.test || d.k}')">🔍 Testar conexão</button>
-        <a class="btn small ghost" href="${d.docs}" target="_blank" rel="noopener">📖 ${d.k === "coleta" ? "Repositório" : d.k === "automacao" ? "Docs n8n" : "Como obter"}</a>
-      </div>
-      <div style="margin-top:10px;font-size:12px;color:var(--faint);line-height:1.55">${d.how}</div>
-      <div id="test-${d.k}" style="margin-top:8px"></div>
-    </div>`;
+  const porGrupo = {};
+  inv.integracoes.filter(i => i.id !== "ia").forEach(i => {
+    (porGrupo[i.grupo] ||= []).push(i);
+  });
+
+  $("#api-body").innerHTML = Object.entries(GRUPOS).map(([g, meta]) => {
+    const itens = porGrupo[g] || [];
+    if (!itens.length) return "";
+    return `<div class="section-title">${meta.titulo} <small style="color:var(--faint);font-weight:500">— ${meta.desc}</small></div>
+      <div class="grid cols-2">${itens.map(i => cardIntegracao(i, cfg)).join("")}</div>`;
   }).join("");
 
-  const alts = [
-    ["Apify (atores TikTok/IG)", "Scrapers prontos com créditos grátis iniciais — alternativa rápida enquanto a Research API não sai.", "https://apify.com"],
-    ["RapidAPI (marketplace)", "Dezenas de APIs de dados sociais com tier gratuito (busca TikTok, métricas IG, trends).", "https://rapidapi.com"],
-    ["Google Trends / pytrends", "Termos em alta por região e período — ótimo termômetro gratuito para o Radar.", "https://trends.google.com"],
-    ["Reddit API (grátis)", "Descoberta de micro-nichos e dor do público por subreddit.", "https://www.reddit.com/dev/api"],
-    ["Groq (Llama) — grátis", "LLM ultra-rápido com tier gratuito: usado pelo Estúdio IA quando conectado.", "https://console.groq.com"],
-    ["Google Gemini — grátis", "Tier gratuito generoso para geração de texto no Estúdio IA.", "https://aistudio.google.com/apikey"],
-    ["YouTube Data API v3", "Oficial e gratuita — única com busca pública real entre as três redes.", "https://developers.google.com/youtube/v3"],
-    ["Web Speech API", "Síntese de voz gratuita no navegador usada no Voice Studio (prévia de narração).", "https://developer.mozilla.org/docs/Web/API/Web_Speech_API"],
-  ];
-  $("#alt-apis").innerHTML = `<table class="table">
-    <thead><tr><th>Opção</th><th>Por que se encaixa</th><th></th></tr></thead>
-    <tbody>${alts.map(([n, d, u]) => `
-      <tr><td><b>${n}</b></td><td style="color:var(--muted)">${d}</td>
-      <td><a class="link-gold" href="${u}" target="_blank" rel="noopener">visitar ↗</a></td></tr>`).join("")}
-    </tbody></table>`;
+  if (inv.meli_tokens?.access) {
+    $("#api-tokens").style.display = "block";
+    $("#api-tokens").innerHTML = `<h3>Mercado Livre — tokens ativos</h3>
+      <div class="kv"><span>Access token</span><b>${esc(inv.meli_tokens.access)}</b></div>
+      <div class="kv"><span>Refresh token</span><b>${esc(inv.meli_tokens.refresh)}</b></div>
+      <div class="kv"><span>Expira em (epoch)</span><b>${esc(inv.meli_tokens.expira_em || "—")}</b></div>
+      <small style="color:var(--muted)">O token é renovado automaticamente quando faltam 5 minutos.
+      Redirect URI esperado: <code>${esc(inv.meli_redirect_uri)}</code></small>`;
+  }
 }
+
+function cardIntegracao(i, cfg) {
+  const campos = i.campos || [];
+  const campoHtml = campos.map(c => {
+    const valor = cfg.settings[c.k] ?? "";
+    if (c.tipo === "bool") {
+      return `<label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin:8px 0">
+        <input type="checkbox" id="set-${c.k}" style="width:auto" ${valor === "1" ? "checked" : ""} /> ${c.label}</label>`;
+    }
+    if (c.tipo === "textarea") {
+      return `<div class="field" style="margin-bottom:8px"><label>${c.label}</label>
+        <textarea id="set-${c.k}" rows="3" placeholder="cole o JSON exportado do ComfyUI (Save → API)">${esc(valor)}</textarea></div>`;
+    }
+    return `<div class="field" style="margin-bottom:8px"><label>${c.label}</label>
+      <input type="${c.tipo === "secret" ? "password" : "text"}" id="set-${c.k}"
+        placeholder="${valor ? "••• " + esc(valor) + " (salvo)" : "colar aqui…"}" /></div>`;
+  }).join("");
+
+  const chaveDeTeste = { suggest: "suggest", google_suggest: "suggest" }[i.id] || i.id;
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h3 style="margin:0">${esc(i.oficial)}</h3>
+      <span class="badge ${i.conectado ? "green" : "gray"}">${i.conectado ? "● conectado" : "○ não conectado"}</span>
+    </div>
+    <small style="color:var(--muted)">${esc(i.custo)}</small>
+    <div style="margin-top:12px">${campoHtml || '<small style="color:var(--faint)">Nenhum campo necessário — já funciona.</small>'}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${campos.length ? `<button class="btn primary small" onclick="saveProvider('${i.id}', ${jattr(campos.map(c => c.k))})">💾 Salvar</button>` : ""}
+      <button class="btn small" onclick="testProvider('${chaveDeTeste}', '${i.id}')">🔍 Testar</button>
+      ${EXTRA_ACOES[i.id] || ""}
+    </div>
+    <div id="test-${i.id}" style="margin-top:8px"></div>
+  </div>`;
+}
+
 window.saveProvider = async (kind, fields) => {
   const patch = {};
   fields.forEach(f => {
     const el = $(`#set-${f}`);
     if (!el) return;
     if (el.type === "checkbox") { patch[f] = el.checked ? "1" : "0"; return; }
-    const v = el.value?.trim(); if (v) patch[f] = v;
+    const v = el.value?.trim();
+    if (v) patch[f] = v;
   });
   if (!Object.keys(patch).length) return toast("Preencha ao menos um campo", true);
   await api("/settings", { method: "POST", body: { settings: patch } });
   toast("Configurações salvas ✔");
   loadStatus(); viewApis();
 };
-window.testProvider = async (kind) => {
-  $(`#test-${kind}`).innerHTML = `<span class="badge gray">testando…</span>`;
-  const r = await api(`/settings/test/${kind}`, { method: "POST" });
-  $(`#test-${kind}`).innerHTML =
-    `<span class="badge ${r.ok ? "green" : "red"}">${esc(r.message)}</span>`;
+
+window.testProvider = async (servico, ancoragem) => {
+  const alvo = $(`#test-${ancoragem || servico}`);
+  if (alvo) alvo.innerHTML = `<span class="badge gray">testando…</span>`;
+  try {
+    const r = await api(`/settings/test/${servico}`, { method: "POST" });
+    if (alvo) alvo.innerHTML = `<span class="badge ${r.ok ? "green" : "red"}">${esc(r.message)}</span>`;
+  } catch (e) {
+    if (alvo) alvo.innerHTML = `<span class="badge red">${esc(e.message)}</span>`;
+  }
+};
+
+window.redditToken = async () => {
+  const r = await api("/integrations/reddit/token", { method: "POST" });
+  toast(r.message, !r.ok);
+  viewApis();
+};
+
+window.meliAuthorize = async () => {
+  const r = await api("/integrations/meli/authorize");
+  if (!r.ok) return toast(r.message, true);
+  window.open(r.url, "_blank", "noopener");
+  openModal(`<h2>🔗 Autorizar Mercado Livre</h2>
+    <p style="color:var(--muted);font-size:13px">1. Autorize na aba que abriu.<br>
+    2. Copie o <code>code</code> da URL de retorno.<br>
+    3. Cole abaixo para concluir a troca por tokens.</p>
+    <div class="code-line">${esc(r.redirect_uri)}</div>
+    <div class="field" style="margin-top:12px"><label>Código (code)</label>
+      <input id="meli-code" placeholder="TG-xxxxxxxx" /></div>
+    <button class="btn primary" onclick="meliExchange()">Concluir autorização</button>`);
+};
+
+window.meliExchange = async () => {
+  const code = $("#meli-code").value.trim();
+  if (!code) return toast("Cole o code", true);
+  try {
+    const r = await api("/integrations/meli/callback", { method: "POST", body: { code } });
+    toast(r.message || (r.ok ? "Autorizado" : "Falhou"), !r.ok);
+    if (r.ok) { closeModal(); viewApis(); }
+  } catch (e) { toast(e.message, true); }
+};
+
+window.meliRefresh = async () => {
+  const r = await api("/integrations/meli/refresh", { method: "POST" });
+  toast(r.message || (r.ok ? "Token renovado" : "Falhou"), !r.ok);
+  viewApis();
+};
+
+window.virloSaldo = async () => {
+  const r = await api("/virlo/balance");
+  if (!r.ok) return toast(r.message || "Virlo não configurada", true);
+  openModal(`<h2>💰 Virlo — conta</h2>
+    <div class="code-line" style="white-space:pre-wrap">${esc(JSON.stringify(r.balance, null, 2))}</div>
+    <small style="color:var(--muted);display:block;margin-top:10px">
+      Orbit/Satellite/Comet custam US$ 0,50 cada (≈60 créditos). Leitura é gratuita.</small>`);
+};
+
+window.runpodHealth = async () => {
+  const r = await api("/runpod/health");
+  if (!r.ok) return toast(r.message || "RunPod indisponível", true);
+  openModal(`<h2>🩺 RunPod — endpoint</h2>
+    <div class="kv"><span>Workers prontos</span><b>${r.workers.prontos}</b></div>
+    <div class="kv"><span>Workers executando</span><b>${r.workers.executando}</b></div>
+    <div class="kv"><span>Na fila</span><b>${r.fila.na_fila}</b></div>
+    <div class="kv"><span>Em execução</span><b>${r.fila.em_execucao}</b></div>`);
+};
+
+// ============================================================ MINERAÇÃO
+async function viewMineracao() {
+  $("#view").innerHTML = `
+    <div class="page-head"><div>
+      <h1>Mineração ⛏️</h1>
+      <p>O modelo que o Virlo usa — <b>Orbit</b> (busca em fila) e <b>Comet</b>
+      (monitor agendado) — rodando com as nossas fontes.</p>
+    </div></div>
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>Novo Orbit — busca em fila</h3>
+        <div class="field"><label>Palavras-chave (uma por linha)</label>
+          <textarea id="orb-kw" rows="3" placeholder="skincare&#10;glass skin"></textarea></div>
+        <div class="form-row" style="margin-top:8px">
+          <div class="field grow"><label>Nome</label><input id="orb-name" placeholder="opcional" /></div>
+          <div class="field grow"><label>Views mínimas</label><input id="orb-min" type="number" value="0" /></div>
+        </div>
+        <button class="btn primary" id="orb-go" style="margin-top:10px">⛏️ Minerar agora</button>
+        <small style="color:var(--faint);display:block;margin-top:8px">10 créditos por Orbit.</small>
+      </div>
+      <div class="card">
+        <h3>Novo Comet — monitor agendado</h3>
+        <div class="field"><label>Palavras-chave (uma por linha)</label>
+          <textarea id="cmt-kw" rows="3" placeholder="achadinhos de cozinha"></textarea></div>
+        <div class="form-row" style="margin-top:8px">
+          <div class="field grow"><label>Frequência</label>
+            <select id="cmt-freq"><option value="6h">A cada 6h</option>
+              <option value="daily" selected>Diário</option><option value="weekly">Semanal</option></select></div>
+          <div class="field grow"><label>Nome</label><input id="cmt-name" placeholder="opcional" /></div>
+        </div>
+        <button class="btn primary" id="cmt-go" style="margin-top:10px">📡 Criar monitor</button>
+        <small style="color:var(--faint);display:block;margin-top:8px">Cada ciclo custa 10 créditos.</small>
+      </div>
+    </div>
+    <div class="section-title">Como o pipeline funciona</div>
+    <div class="card" id="mining-explain">…</div>
+    <div class="section-title">Orbits <button class="btn small" onclick="viewMineracao()">↻</button></div>
+    <div class="card"><div id="orb-list">…</div></div>
+    <div class="section-title">Comets (série temporal)</div>
+    <div class="card"><div id="cmt-list">…</div></div>`;
+
+  $("#orb-go").onclick = () => criarOrbit();
+  $("#cmt-go").onclick = () => criarComet();
+  carregarExplicacao();
+  carregarOrbits();
+  carregarComets();
+}
+
+async function carregarExplicacao() {
+  const el = $("#mining-explain");
+  if (!el) return;
+  const d = await api("/mining/como-funciona");
+  el.innerHTML = `<p style="color:var(--muted);font-size:13px">${esc(d.resumo)}</p>
+    <table class="table"><tbody>
+      ${d.etapas.map(e => `<tr><td style="width:180px"><b>${esc(e.etapa || e.etaapa || "")}</b></td>
+        <td style="color:var(--muted)">${esc(e.detalhe)}</td></tr>`).join("")}
+    </tbody></table>
+    <small style="color:var(--faint);display:block;margin-top:10px">${esc(d.diferenca)}</small>`;
+}
+
+const linhasParaLista = (txt) => txt.split("\n").map(x => x.trim()).filter(Boolean);
+
+window.criarOrbit = async () => {
+  const keywords = linhasParaLista($("#orb-kw").value);
+  if (!keywords.length) return toast("Informe ao menos uma palavra-chave", true);
+  toast("Minerando…");
+  try {
+    const r = await api("/mining/orbits", { method: "POST", body: {
+      name: $("#orb-name").value.trim(), keywords, min_views: +$("#orb-min").value || 0 } });
+    loadMe();
+    toast(`Orbit pronto: ${r.orbit.report?.videos_unicos || 0} vídeos, ${r.orbit.report?.outliers || 0} outliers`);
+    carregarOrbits();
+  } catch (e) { toast(e.message, true); }
+};
+
+window.criarComet = async () => {
+  const keywords = linhasParaLista($("#cmt-kw").value);
+  if (!keywords.length) return toast("Informe ao menos uma palavra-chave", true);
+  try {
+    await api("/mining/comets", { method: "POST", body: {
+      name: $("#cmt-name").value.trim(), keywords, frequency: $("#cmt-freq").value } });
+    toast("Monitor criado 📡");
+    carregarComets();
+  } catch (e) { toast(e.message, true); }
+};
+
+async function carregarOrbits() {
+  const el = $("#orb-list");
+  if (!el) return;
+  const d = await api("/mining/orbits");
+  if (!d.orbits.length) {
+    el.innerHTML = `<div class="empty">Nenhum Orbit ainda — o primeiro vira a base do Radar.</div>`;
+    return;
+  }
+  el.innerHTML = `<table class="table"><thead><tr>
+      <th>Orbit</th><th>Keywords</th><th class="num">Vídeos</th><th class="num">Outliers</th>
+      <th>Status</th><th></th></tr></thead><tbody>
+    ${d.orbits.map(o => `<tr>
+      <td><b>${esc(o.name)}</b><br><small style="color:var(--faint)">${o.created_at?.slice(0, 16).replace("T", " ")}</small></td>
+      <td style="color:var(--muted);font-size:12px">${esc((o.keywords || []).join(", ")).slice(0, 60)}</td>
+      <td class="num">${o.report?.videos_unicos ?? "—"}</td>
+      <td class="num"><b style="color:var(--gold)">${o.report?.outliers ?? "—"}</b></td>
+      <td><span class="badge ${o.status === "completed" ? "green" : "gray"}">${o.status}</span></td>
+      <td><button class="btn small" onclick="verOrbit('${o.id}')">👁</button>
+          <button class="btn small ghost" onclick="apagarOrbit('${o.id}')">🗑</button></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+window.verOrbit = async (id) => {
+  const d = await api(`/mining/orbits/${id}?limit=25`);
+  openModal(`<h2>⛏️ ${esc(d.orbit.name)}</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <span class="badge gold">${d.orbit.report?.videos_unicos || 0} vídeos</span>
+      <span class="badge violet">${d.orbit.report?.outliers || 0} outliers</span>
+      <span class="badge gray">mediana ${fmtNum(d.orbit.report?.mediana_views || 0)}</span>
+      ${Object.entries(d.orbit.fontes || {}).map(([f, n]) => `<span class="badge cyan">${f}: ${n}</span>`).join("")}
+    </div>
+    <table class="table"><tbody>
+      ${(d.outliers.length ? d.outliers : d.videos).slice(0, 15).map(v => `<tr>
+        <td><b>${esc(v.title || "—")}</b><br><small style="color:var(--muted)">${esc(v.handle || "")} · ${v.platform}</small></td>
+        <td class="num">${fmtNum(v.views)}</td>
+        <td class="num" style="color:var(--gold)">${v.outlier_ratio}x</td>
+        <td class="num">${v.outlier_score}</td>
+      </tr>`).join("") || '<tr><td>Sem vídeos — configure uma fonte real (YouTube/Virlo).</td></tr>'}
+    </tbody></table>`);
+};
+
+window.apagarOrbit = async (id) => {
+  if (!confirm("Apagar este Orbit?")) return;
+  await api(`/mining/orbits/${id}`, { method: "DELETE" });
+  carregarOrbits();
+};
+
+async function carregarComets() {
+  const el = $("#cmt-list");
+  if (!el) return;
+  const d = await api("/mining/comets");
+  if (!d.comets.length) {
+    el.innerHTML = `<div class="empty">Nenhum monitor ainda. O Comet empilha observações
+      a cada ciclo — é o que transforma busca em série temporal.</div>`;
+    return;
+  }
+  el.innerHTML = d.comets.map(c => {
+    const serie = (c.series || []).map(s => s.videos);
+    const ultimo = (c.series || [])[(c.series || []).length - 1];
+    return `<div class="agent-row">
+      <div>
+        <b>${esc(c.name)}</b> <span class="badge cyan">${c.frequency}</span>
+        <br><small style="color:var(--muted)">${esc((c.keywords || []).join(", ")).slice(0, 70)}</small>
+        <br><small style="color:var(--faint)">
+          ${c.last_run ? `último ciclo: ${c.last_run} · ${ultimo?.videos ?? 0} vídeos · ${ultimo?.outliers ?? 0} outliers` : "nunca executado"}
+          ${c.next_run ? ` · próxima: ${c.next_run.replace("T", " ").replace("Z", "")}` : ""}</small>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        ${serie.length > 1 ? sparkline(serie, 90, 26) : ""}
+        <button class="btn small primary" onclick="rodarComet('${c.id}')">▶ Ciclo</button>
+        <button class="btn small ghost" onclick="apagarComet('${c.id}')">🗑</button>
+      </div></div>`;
+  }).join("");
+}
+
+window.rodarComet = async (id) => {
+  try {
+    await api(`/mining/comets/${id}/run`, { method: "POST" });
+    loadMe(); carregarComets();
+    toast("Ciclo executado");
+  } catch (e) { toast(e.message, true); }
+};
+
+window.apagarComet = async (id) => {
+  if (!confirm("Apagar este monitor?")) return;
+  await api(`/mining/comets/${id}`, { method: "DELETE" });
+  carregarComets();
 };
 
 // ------------------------------------------------------------------ boot

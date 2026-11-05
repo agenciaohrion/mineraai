@@ -1,54 +1,66 @@
 # ⛏️ MineraAI — Ecossistema Unificado de Descoberta Viral, Commerce & Criação
 
-**v2 — escopo unificado.** Um único produto que cobre o que quatro ferramentas de
+**v3 — integrações diretas.** Um único produto que cobre o que quatro ferramentas de
 mercado fazem separadamente, com o loop fechado que nenhuma delas tem:
 *descobrir → validar o produto → gerar o roteiro → produzir o vídeo → medir o resultado.*
 
 | Referência de mercado | O que o MineraAI implementa |
 |---|---|
-| **Virlo** (short-form video intelligence) | 🚀 **Outliers** (vídeos furando a curva do próprio criador) + 🤖 **Research Agents** (pesquisa agendada com dossiê entregue no Slack/Discord/webhook) + 📡 **API pública** e **MCP** |
+| **Virlo** (short-form video intelligence) | 🚀 **Outliers** (vídeos furando a curva do próprio criador) + 🤖 **Research Agents** (pesquisa agendada com dossiê entregue no Slack/Discord/webhook) + ⛏️ **Mineração** (Orbit/Comet: o modelo deles, rodando com as nossas fontes) + 📡 **API pública** e **MCP** + integração opcional da **Virlo API** como fonte paga |
 | **ViralFindr** (pesquisa de conteúdo viral) | 🔎 **Radar Viral**: busca por palavra-chave em TikTok, Instagram e YouTube com viral score, filtros (período, ordenação, views mínimas), hashtags dominantes, sons em alta e criadores do tema |
 | **Kalodata** (analytics de TikTok Shop) | 📦 **Produtos** com GMV **em faixa de confiança**, unidades, crescimento, curva 14 dias, comissões + 🏪 **Lojas** (catálogo, criadores afiliados, dependência de live) + 👤 **Criadores** + 🔴 **Vídeos & Lives** (live commerce) |
 | **DarkLab AI** (laboratório para canais dark) | ✨ **Estúdio IA**: hooks virais, roteiros UGC/dark cena a cena, legendas + hashtags, títulos SEO YouTube, 🧪 **Viral Lab** (engenharia reversa com metadados reais via oEmbed), 🎙️ **Voice Studio** e 🧭 **Radar de Nichos** |
-| — (produção em escala) | 🎬 **Fábrica de Vídeos**: jobs de geração enviados ao **n8n → ComfyUI no RunPod serverless**, com entrega do MP4 dentro da plataforma (workflows prontos em `n8n/`) |
+| — (produção em escala) | 🎬 **Fábrica de Vídeos**: o MineraAI chama a API do **RunPod serverless direto** (`/runsync` ou `/run`) com o workflow do ComfyUI — **sem n8n no meio**, sem webhook, sem callback |
 
 ### 💳 Camada SaaS (o que faltava para ser produto, não demo)
 
 | Recurso | Como funciona |
 |---|---|
 | **Multi-tenant** | cada workspace tem plano, créditos, chaves de API e agentes isolados (`POST /api/workspaces` cria um na hora) |
-| **Créditos** | toda ação que gasta rede/IA/GPU é cobrada (busca = 2, agent run = 100, vídeo = 250) — mesmo modelo de Virlo e Kalodata |
+| **Créditos** | toda ação que gasta rede/IA/GPU é cobrada (busca = 2, agent run = 100, vídeo = 250, Orbit = 10, chamada paga da Virlo = 60) — mesmo modelo de Virlo e Kalodata |
 | **Cotas** | limite diário + teto mensal por plano (free → enterprise), com **HTTP 402/429** explicando exatamente quanto falta |
 | **Ledger** | cada consumo é registrado; `/api/billing/usage` mostra por ação e por dia |
 | **API keys** | `X-API-Key` (ou Bearer) por workspace, com revogação e último uso |
 | **Planos** | free · starter (R$49) · pro (R$199) · enterprise, com upgrade simulado pronto para plugar Stripe |
 
-Além disso: **Dashboard** com visão do dia + **termos em alta em tempo real
-(Google Trends BR)**, **Fábrica de Vídeos 🎬** (produção automatizada via
-**n8n + RunPod/ComfyUI** — veja [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md)),
-**Biblioteca** persistente e **APIs & Conexões** com gestão de chaves e testes.
+### 🔌 Uma integração por card, uma credencial por fonte
 
-### 🆓 Pacote de fontes gratuitas integradas (monumental, quase sem custo)
+A tela **APIs & Conexões** deixou de ser um bloco único. Cada serviço tem o seu card
+com os seus campos, o seu teste e o seu custo — se uma fonte cai, as outras seguem:
 
-- **Oficiais com chave grátis**: YouTube Data API v3, TikTok Research API,
-  Instagram Graph API
-- **Sem chave nenhuma**: Scrapling (coleta pública), Mercado Livre (produtos
-  reais BR com preço/vendas/reviews), Reddit JSON (pauta viral), Google
-  Suggest (demanda de busca), Google Trends RSS, oEmbed YouTube/TikTok
-- **Chave grátis opcional**: Pexels (B-roll), Groq/Gemini (LLMs do Estúdio)
-- **Produção de vídeo**: n8n (self-host grátis) + RunPod serverless
-  (centavos por vídeo) orquestrando ComfyUI — workflows importáveis em `n8n/`
+| Grupo | Integrações | Campos próprios |
+|---|---|---|
+| **Plataformas oficiais** | YouTube Data API v3 · TikTok Research API · Instagram Graph API | `YOUTUBE_API_KEY` · `TIKTOK_CLIENT_*` · `IG_ACCESS_TOKEN`+`IG_USER_ID` |
+| **Dados pagos** | **Virlo API** (Orbit · Comet · Satellite) | `VIRLO_API_KEY` · `VIRLO_AUTO_USE` · `VIRLO_BASE_URL` |
+| **IA** | **OpenAI** e **Gemini** — chaves independentes | `OPENAI_API_KEY`/`MODEL`/`BASE_URL` · `GEMINI_API_KEY`/`MODEL` |
+| **Fontes gratuitas** | **Reddit (OAuth)** · **Mercado Livre (OAuth)** · **Google Suggest** · **oEmbed** · **Google Trends** · **Pexels** | um campo por fonte (ver `.env.example`) |
+| **Produção** | **RunPod Serverless** direto | `RUNPOD_API_KEY` · `RUNPOD_ENDPOINT_ID` · `RUNPOD_GPU_PRICE_HORA` · template do workflow |
 
-### Fontes de dados em 3 camadas (cada item é rotulado)
+Sem nenhuma chave a plataforma roda em **modo demonstração** (motor determinístico com
+distribuição power-law de views, engajamento derivado, curvas de venda) e cada item
+exibe o selo da origem: `oficial` · `virlo` · `mineração` · `demo`.
+
+### 🔐 OAuth de verdade, não "campo opcional"
+
+- **Reddit** — `POST /api/integrations/reddit/token` faz `client_credentials` com
+  Basic auth e guarda o token (100 req/min em vez de 10 no endpoint público).
+  Sem credencial, cai no JSON público automaticamente.
+- **Mercado Livre** — fluxo `authorization_code` completo:
+  `GET /api/integrations/meli/authorize` → usuário autoriza → `POST /api/integrations/meli/callback`
+  troca o `code` por `access_token` + `refresh_token`, e `POST /api/integrations/meli/refresh`
+  renova (o `meli_access_token()` renova sozinho quando faltam 5 minutos).
+
+### 📡 Fontes de dados em 4 camadas (cada item é rotulado)
 
 | Selo | Fonte | Quando |
 |---|---|---|
-| 🟢 `oficial` | APIs oficiais (YouTube Data v3, TikTok Research, IG Graph) | chaves configuradas |
-| 🔵 `coleta real` | **[Scrapling](https://github.com/D4Vinci/Scrapling)** — coleta pública em tempo real das páginas de busca, com fingerprint TLS de Chrome | ligada por padrão, sem chave |
-| 🟣 `demo` | Motor determinístico de demonstração | fallback sempre disponível |
+| 🟢 `oficial` | APIs oficiais (YouTube Data v3, TikTok Research, IG Graph, Mercado Livre) | chaves configuradas |
+| 🟣 `virlo` | **Virlo API** — índice pronto de short-form (Orbit/Satellite) | `VIRLO_API_KEY` (+ `VIRLO_AUTO_USE` no Radar) |
+| 🟡 `mineração` | Orbits e Comets do próprio MineraAI (`server/mining.py`) | quando você minera |
+| ⚪ `demo` | Motor determinístico de demonstração | fallback sempre disponível |
 
 > Design, código e textos 100% originais — as plataformas acima foram usadas apenas
-> como referência de *funcionalidades* (features não são copiáveis, código/design sim).
+> como referência de *funcionalidades*. Nada de Scrapling, nada de n8n, nada de Groq.
 
 ---
 
@@ -58,68 +70,42 @@ Além disso: **Dashboard** com visão do dia + **termos em alta em tempo real
 ./run.sh          # cria o venv, instala dependências e sobe em http://0.0.0.0:8000
 ```
 
-Sem nenhuma chave configurada a plataforma roda em **modo demonstração**: um motor
-determinístico gera datasets realistas (distribuição power-law de views, engajamento
-derivado, curvas de venda) para o produto ser explorável de ponta a ponta. Cada item
-exibe o selo `demo` ou `oficial` indicando a origem do dado.
+Depois abra **APIs & Conexões** no app e preencha só o que você tem — o card fica
+verde ("conectado") assim que o teste passa.
 
 ---
 
-## 🔌 APIs utilizadas (pesquisa de viabilidade, set/2026)
+## 🎬 Fábrica de vídeo: RunPod direto (sem n8n)
 
-### Scrapling — coleta pública sem chave (integrado)
+```
+MineraAI ──POST /v2/{endpoint}/runsync──▶ worker ComfyUI no RunPod
+        ◀──── {"status":"COMPLETED","output":{"message":"<url do mp4>"}}
+```
 
-O repositório [D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) foi
-integrado como camada intermediária de dados reais:
+- **`mode: "sync"`** → `runsync`, espera o vídeo (limite de 20 MB de payload).
+- **`mode: "async"`** → `run` + `GET /status/{id}` com polling
+  (`GET /api/fabrica/jobs/{id}/poll`), cancelamento via `/cancel`.
+- O workflow do ComfyUI vem de `RUNPOD_WORKFLOW_TEMPLATE` (formato API, "Save → API
+  Format") ou do grafo SDXL padrão em `server/runpod.py`; o prompt é injetado nos nós
+  `CLIPTextEncode`, o seed é randomizado e o custo é estimado por `executionTime × preço da GPU`.
+- Guia completo: [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md).
 
-- `Fetcher` com **impersonação de Chrome** (TLS fingerprint) e headers stealth;
-- **YouTube**: parsing do JSON `ytInitialData` embutido na página de busca —
-  retorna vídeos reais com views, canal, duração e data (sem cota, sem chave);
-- **TikTok**: parsing do `__UNIVERSAL_DATA_FOR_REHYDRATION__` da busca;
-- **Instagram**: tentativa na página pública de hashtag (normalmente exige
-  login — para IG o caminho recomendado segue sendo a Graph API oficial);
-- **Google Trends**: RSS público oficial → termos em alta no Brasil em tempo
-  real, exibidos no Dashboard e clicáveis para garimpar no Radar Viral;
-- **Circuit breaker**: se uma varredura falhar por completo (ex.: servidor sem
-  saída de rede), a coleta entra em cooldown de 10 min para não atrasar buscas;
-  qualquer sucesso reseta o circuito;
-- **Modo stealth opcional** (`scrapling install` + checkbox na aba de APIs)
-  usa o StealthyFetcher com navegador real para sites com anti-bot pesado.
+## ⛏️ Mineração: como o Virlo faz, como fazemos
 
-Uso responsável: 1 requisição por plataforma/busca, timeouts curtos, retries
-mínimos e sem contornar login/paywall.
+O Virlo não tem API oficial das redes — ele mantém **fila de coleta (Orbit)** +
+**monitor agendado (Comet)** + detecção de outlier por baseline de criador. A doc
+pública deles revela o desenho (`POST /orbit` devolve um `id` e leva 5–10 min;
+leitura é grátis, criação custa US$ 0,50). Reproduzimos o desenho com fontes
+legítimas — desta vez, sem depender de n8n:
 
-Testes dos parsers (sem rede): `.venv/bin/python -m server.tests_scrapling`
+```
+keywords → job persistido (queued) → worker coleta (YouTube oficial + Virlo + ingestão)
+        → normalize → dedupe → métricas (viral + outlier) → data/orbits.json
+Comet  → mesmo pipeline a cada ciclo → série temporal (videos, outliers, mediana)
+```
 
-### Oficiais — prioridade do projeto
-
-| API | Custo | Requisitos | Uso no MineraAI |
-|---|---|---|---|
-| **YouTube Data API v3** | ✅ Gratuita — 10.000 unidades/dia (`search` = 100 unid., `videos.list` = 1 unid.) | Chave simples no Google Cloud Console | Busca real de vídeos com views/likes/comentários — **a única das 3 redes com busca pública gratuita** |
-| **TikTok Research API** | ✅ Gratuita | Aprovação restrita a instituições acadêmicas/sem fins lucrativos (revisão de semanas a meses); uso não-comercial | Busca de vídeos por keyword com métricas completas |
-| **Instagram Graph API** | ✅ Gratuita | Conta **Business/Creator** vinculada a uma Página + app aprovado (Meta App Review). Limite oficial: 30 hashtags únicas/7 dias | Busca de mídia por hashtag (`ig_hashtag_search` → `top_media`) |
-
-**Como conectar:** aba *APIs & Conexões* dentro do app (ou copie `.env.example` → `.env`).
-
-### Alternativas pesquisadas (para cobrir as lacunas das oficiais)
-
-- **Apify** — atores prontos de TikTok/IG com créditos grátis iniciais (scraping estruturado).
-- **RapidAPI** — marketplace com dezenas de APIs sociais com tier gratuito.
-- **Google Trends / pytrends** — termômetro gratuito de termos em alta.
-- **Reddit API** — gratuita, útil para descoberta de micro-nichos e dores do público.
-- **Groq (Llama) e Google Gemini** — tiers gratuitos generosos de LLM; elevam a qualidade
-  do Estúdio IA quando conectados (o motor interno de copywriting já funciona sem chave).
-- **Web Speech API** — síntese de voz gratuita do navegador (prévia do Voice Studio).
-
-### Por que o modo demonstração existe
-
-TikTok encerrou o acesso amplo gratuito e a Research API exige vínculo acadêmico;
-a Meta fechou o acesso público do Instagram em 2020 (Graph API cobre apenas contas
-autorizadas + busca de hashtags limitada). Ou seja: **nenhuma solução 100% gratuita
-cobre busca pública em TikTok/IG hoje** — o padrão de mercado (Kalodata etc.) é usar
-coleta própria + modelos de estimativa, exatamente o que o motor demo simula aqui,
-com rótulo transparente. Ao plugar as chaves oficiais, os dados reais passam a ter
-prioridade e são mesclados automaticamente.
+Documento completo, com as etapas uma por uma e o trade-off
+"mineração própria × Virlo API": [`docs/MINERACAO.md`](docs/MINERACAO.md).
 
 ---
 
@@ -127,79 +113,106 @@ prioridade e são mesclados automaticamente.
 
 ```
 server/
-  main.py              # FastAPI + rotas (/api/*), tenant/billing e frontend
-  research.py          # DATA LAYER: busca unificada, fan-out de fontes, outliers
-  schema.py            # Esquema unificado das entidades + merge/dedupe entre fontes
-  metrics.py           # viral_score, outlier_score, velocity, GMV em faixa, trend
-  credits.py           # Planos, créditos, cotas, ledger e chaves de API (multi-tenant)
-  agents.py            # Research Agents: CRUD, execução, agendador e entrega externa
-  providers.py         # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
-  scrapling_sources.py # Camada COLETA: Scrapling (YouTube/TikTok/IG + Google Trends)
-  free_sources.py      # Grátis sem chave: Mercado Livre, Reddit, Suggest, oEmbed, Pexels
-  pipeline.py          # Fábrica de Vídeos (jobs n8n/RunPod) + mineração/ingestão
-  data.py              # Motor demo determinístico (vídeos, produtos, lojas, lives)
-  ai_engine.py         # Estúdio IA: motor interno de copy + adaptadores Groq/Gemini/OpenAI
-  storage.py           # Persistência JSON (biblioteca + configurações/chaves)
-  tests_scrapling.py   # Testes offline dos parsers de coleta (fixtures locais)
-  tests_unified.py     # Testes offline da camada unificada (métricas/schema/créditos/agentes)
-static/                # SPA em JS puro (sem build)
-n8n/                   # Workflows n8n importáveis (Fábrica + Mineração)
-docs/AUTOMACAO.md      # Guia RunPod + n8n ponta a ponta
-data/                  # Arquivos persistidos em runtime (gitignored)
+  main.py          # FastAPI + rotas (/api/*), tenant/billing e frontend
+  research.py      # DATA LAYER: fan-out oficial → Virlo → mineração → demo, outliers
+  schema.py        # Esquema unificado das entidades + merge/dedupe entre fontes
+  metrics.py       # viral_score, outlier_score, velocity, GMV em faixa, trend
+  credits.py       # Planos, créditos, cotas, ledger e chaves de API (multi-tenant)
+  agents.py        # Research Agents: CRUD, execução, agendador e entrega externa
+  providers.py     # Conectores OFICIAIS: YouTube, TikTok Research, Instagram Graph
+  free_sources.py  # Reddit (OAuth) · Mercado Livre (OAuth) · Suggest · oEmbed · Trends · Pexels
+  virlo.py         # Cliente da Virlo API: Orbit · Comet · Satellite · trends · hashtags
+  runpod.py        # Cliente DIRETO do RunPod: submit, status, poll, cancel, custo
+  mining.py        # Orbits/Comets: fila de coleta, agendador, série temporal
+  pipeline.py      # Fábrica de Vídeos: jobs + dispatch ao RunPod + polling
+  data.py          # Motor demo determinístico (vídeos, produtos, lojas, lives)
+  ai_engine.py     # Estúdio IA: motor interno + adaptadores OpenAI e Gemini
+  storage.py       # Persistência JSON (biblioteca + configurações/chaves)
+  tests_unified.py      # Testes offline: métricas, schema, créditos, agentes
+  tests_integracoes.py  # Testes offline: RunPod, Virlo, mineração e as 6 fontes
+static/            # SPA em JS puro (sem build)
+docs/              # ARQUITETURA · AUTOMACAO (RunPod) · MINERACAO
+data/              # Arquivos persistidos em runtime (gitignored)
 ```
 
 **Decisões-chave**
 
-1. **Esquema de dados unificado**: todo vídeo — oficial, coleta ou demo — passa
-   por `normalize_video()`, então o frontend não muda com a fonte dos dados.
+1. **Esquema de dados unificado**: todo vídeo — oficial, Virlo, mineração ou demo —
+   passa por `normalize_video()`; o frontend não muda com a fonte.
 2. **Viral score**: `0.50·velocidade + 0.35·engajamento + 0.15·recência` (0–100).
 3. **Outlier score**: `views ÷ baseline do criador` em escala log (0–100), caindo
-   para a mediana do nicho quando não há histórico — é o sinal preditivo do produto.
-4. **GMV sempre em faixa**: `unidades × ticket` com intervalo de confiança
-   (nunca um número único) — a leitura honesta que os dados públicos permitem.
-5. **IA em camadas**: LLM externo se houver chave (Groq/Gemini/OpenAI-compatível);
-   senão, frameworks de copywriting (curiosidade, prova social, PAS, AIDA) offline.
-6. **Sem build de frontend**: HTML/CSS/JS puros servidos pelo próprio FastAPI —
-   deploy em qualquer lugar com Python 3.11+.
+   para a mediana do corpus quando não há histórico — o sinal preditivo do produto.
+4. **GMV sempre em faixa**: `unidades × ticket` com intervalo de confiança.
+5. **IA em camadas**: OpenAI ou Gemini (chaves separadas) se houver; senão o motor
+   interno de copywriting (PAS, AIDA, prova social) offline.
+6. **Integração direta**: nenhum orquestrador externo entre o produto e as APIs.
+   Menos salto, menos ponto de falha, menos latência e um log a menos para auditar.
+7. **Sem build de frontend**: HTML/CSS/JS puros servidos pelo próprio FastAPI.
 
 ## 📡 Endpoints principais
 
 ```
-GET  /api/status                      # modo atual + conectividade dos providers
-GET  /api/search?q=&platform=&period=&sort=&min_views=   # oficial → coleta → n8n → demo
-GET  /api/outliers?q=&platform=&period=&min_score=       # vídeos furando a curva
-GET  /api/shops?q=&category=&sort=   | GET /api/shops/{id}
-GET  /api/agents  POST /api/agents  PATCH/DELETE /api/agents/{id}
-POST /api/agents/{id}/run                                # executa (100 créditos)
-GET  /api/me  GET /api/billing/usage  GET /api/billing/plans
-POST /api/billing/plan  POST /api/billing/credits  POST/DELETE /api/billing/keys
-POST /api/workspaces                                     # cadastro multi-tenant
-GET  /api/mcp/manifest                                   # ferramentas p/ Claude/MCP
-GET  /api/trends?limit=               # termos em alta (Google Trends BR, tempo real)
-GET  /api/products?q=&category=&sort= | GET /api/products/{id}
-GET  /api/creators  GET /api/lives  GET /api/niches
-POST /api/ai/hooks | /api/ai/script | /api/ai/caption | /api/ai/titles
-POST /api/ai/analyze | /api/ai/narration
-GET/POST/DELETE /api/library
-GET/POST /api/settings  ·  POST /api/settings/test/{youtube|tiktok|instagram|coleta}
-```
+# descoberta
+GET  /api/status                                  # modo + conectividade por integração
+GET  /api/search?q=&platform=&period=&sort=&min_views=   # oficial → virlo → mineração → demo
+GET  /api/outliers?q=&platform=&period=&min_score=
+GET  /api/trends?limit=                           # Google Trends BR em tempo real
 
+# commerce intel
+GET  /api/shops | /api/shops/{id} | /api/products | /api/products/{id}
+GET  /api/creators | /api/lives | /api/niches
+
+# criação
+POST /api/ai/hooks | /script | /caption | /titles | /analyze | /narration
+GET/POST/DELETE /api/library
+
+# fábrica de vídeo (RunPod direto)
+POST /api/fabrica/jobs                            # {product, prompt, images[], mode: sync|async}
+GET  /api/fabrica/jobs | /api/fabrica/jobs/{id}
+GET  /api/fabrica/jobs/{id}/poll | /cancel
+GET  /api/runpod/health | /api/runpod/workflow
+
+# virlo api
+GET  /api/virlo/balance | /trends | /hashtags | /orbit | /orbit/{id}
+POST /api/virlo/orbit | /api/virlo/satellite/{platform}/{username}
+
+# mineração (orbit/comet)
+GET/POST/DELETE /api/mining/orbits | /api/mining/orbits/{id}
+GET/POST/DELETE /api/mining/comets | POST /api/mining/comets/{id}/run
+GET  /api/mining/como-funciona
+POST /api/ingest/videos                           # entrada de dados por workspace
+
+# agentes, billing, integrações
+GET/POST /api/agents · POST /api/agents/{id}/run
+GET  /api/me | /api/billing/usage | /api/billing/plans
+POST /api/billing/plan | /credits | /keys
+GET  /api/integrations                            # inventário: campos por fonte
+GET  /api/integrations/meli/authorize
+POST /api/integrations/reddit/token | /meli/callback | /meli/refresh
+GET/POST /api/settings
+POST /api/settings/test/{youtube|tiktok|instagram|openai|gemini|virlo|reddit|
+                         mercadolivre|suggest|oembed|trends|pexels|runpod}
+GET  /api/mcp/manifest
+```
 
 ---
 
 ## 🧪 Testes
 
 ```bash
-.venv/bin/python -m server.tests_unified    # métricas, schema, créditos, agentes
-.venv/bin/python -m server.tests_scrapling  # parsers da camada de coleta
+.venv/bin/python -m server.tests_unified      # métricas, schema, créditos, agentes
+.venv/bin/python -m server.tests_integracoes  # RunPod, Virlo, mineração e as 6 fontes
 ```
 
-Nenhum dos dois toca a rede: são a garantia de que a matemática do produto
-(outlier, GMV, cobrança) e os parsers continuam corretos após qualquer mudança.
+Nenhum toca a rede: `httpx` é substituído por dublês, então dá para validar
+contrato (URL, auth, payload, tratamento de 401/404) sem gastar cota nem arriscar
+banimento. São a garantia de que a matemática do produto e as integrações
+continuam corretas depois de qualquer mudança.
 
 ## 📚 Documentação
 
-- [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) — desenho da plataforma unificada,
-  modelo de dados, cobrança em créditos e roadmap por fases.
-- [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md) — RunPod + n8n ponta a ponta.
+- [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) — desenho da plataforma, modelo de
+  dados, cobrança em créditos e roadmap por fases.
+- [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md) — RunPod serverless + ComfyUI ponta a ponta.
+- [`docs/MINERACAO.md`](docs/MINERACAO.md) — como o Virlo minera e como replicamos.
 - [`DEPLOY.md`](DEPLOY.md) — VPS Contabo (systemd + nginx).

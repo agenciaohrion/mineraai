@@ -20,7 +20,7 @@
                                      │  ativo pronto
                      ┌───────────────▼──────────────────────────┐
                      │       PRODUÇÃO  (factory layer)          │
-                     │  n8n → ComfyUI/RunPod → MP4 → Biblioteca │
+                     │  RunPod (ComfyUI) → MP4 → Biblioteca     │
                      └───────────────┬──────────────────────────┘
                                      │  resultado realimenta
                                      └──────────► dados (loop fechado)
@@ -48,18 +48,46 @@ resultado volta para a base de dados.
 Ponto único de entrada para qualquer pesquisa. Ordem de confiança:
 
 ```
-API oficial  >  coleta pública (Scrapling)  >  n8n (mineração/ingestão)  >  demo
+API oficial  >  Virlo API  >  mineração própria (Orbit/Comet)  >  demo
 ```
 
 Responsabilidades:
 
-- fan-out assíncrono das fontes (`collect_official`, `collect_public`);
+- fan-out assíncrono das fontes (`collect_official`, `collect_virlo`,
+  `mined_for_query` em `mining.py`);
 - deduplicação via esquema unificado;
 - enriquecimento com métricas;
-- fallback transparente — uma fonte fora do ar nunca derruba a resposta.
+- fallback transparente — uma fonte fora do ar nunca derruba a resposta
+  (erros agregados em `errors`, exibidos na UI como "⚠ fontes com erro").
 
 Consumidores: endpoints REST, Research Agents, API pública e MCP. Nenhum deles
-fala com `providers.py` ou `scrapling_sources.py` diretamente.
+fala com `providers.py`, `virlo.py` ou `mining.py` diretamente. A troca de fonte é
+uma decisão de `research.py`, não do consumidor.
+
+**Por que existe a camada:** cada fonte tem custo e formato próprios — YouTube Data
+é grátis e cota limitada, a Virlo é paga por chamada (US$ 0,50) e a mineração
+própria custa CPU do servidor. Concentrar a escolha num único módulo permite
+ligar/desligar fonte por configuração (`VIRLO_AUTO_USE`) sem tocar em rota nenhuma.
+
+### 2.1.1 Integrações — `server/free_sources.py`, `virlo.py`, `runpod.py`
+
+Cada integração é um módulo independente, com `configured()` próprio, teste
+individual (`POST /api/settings/test/{id}`) e tratamento de erro próprio:
+
+| Módulo | Integração | Auth | Falha isolada |
+|---|---|---|---|
+| `providers.py` | YouTube · TikTok · Instagram | API key / OAuth | cai para a próxima camada |
+| `virlo.py` | Virlo (Orbit/Comet/Satellite) | `Bearer virlo_tkn_*` | `VirloError` com status |
+| `free_sources.py` | Reddit · Mercado Livre · Suggest · oEmbed · Trends · Pexels | OAuth/client credentials/chave própria | mensagem por fonte |
+| `runpod.py` | RunPod serverless | `Bearer` + endpoint id | `RunPodError` com status |
+
+`GET /api/integrations` devolve o inventário — id, grupo, campos aceitos,
+`conectado` e custo — e é o que a tela **APIs & Conexões** usa para montar um card
+por serviço. Não há campo compartilhado entre fontes: derrubar a cota do Reddit
+não afeta o Pexels.
+
+Chaves marcadas como secretas em `storage.SECRET_KEYS` são mascaradas na leitura e
+nunca devolvidas em claro (a máscara é aplicada no ponto único `is_secret()`).
 
 ### 2.2 Esquema — `server/schema.py`
 
@@ -74,7 +102,7 @@ Cinco entidades, um `uid` estável por entidade:
 | `live` | `live:<plataforma>:<id>` | viewers_peak, gmv, live_now |
 
 `merge()` resolve conflito por ranking de fonte **sem perder campo preenchido** —
-se a coleta trouxe a thumb e a API oficial não, a thumb sobrevive.
+se a Virlo trouxe a thumb e a API oficial não, a thumb sobrevive.
 
 ### 2.3 Métricas — `server/metrics.py`
 
@@ -118,7 +146,10 @@ Custo por ação (extrato da verdade em `credits.ACTIONS`):
 | `outliers` | 3 | `ai_analyze` | 15 |
 | `products` | 2 | `ai_narration` | 30 |
 | `agent_run` | 100 | `fabrica_job` | 250 |
-| `mining` | 10 | `ingest` | 0 (grátis) |
+| `mining_orbit` | 10 | `mining_comet` | 10 |
+| `virlo_read` | 1 | `virlo_orbit` | 60 |
+| `virlo_satellite` | 60 | `virlo_comet` | 60 |
+| `ingest` | 0 (grátis) | `runpod_health` | 0 (grátis) |
 
 Erros devolvidos: **402** (`quota_exceeded`, com `credits_needed` e
 `credits_remaining`) e **429** (`rate_limited`, com `daily_limit`). A UI mostra a
@@ -149,9 +180,10 @@ SPA sem build. Módulos visíveis:
 
 | Menu | Tela | Serve para |
 |---|---|---|
-| Descoberta | 🔎 Radar Viral | busca + facetas |
+| Descoberta | 🔎 Radar Viral | busca + facetas (seletor de origem) |
 | | 🚀 Outliers | sinal preditivo + baseline |
 | | 🤖 Research Agents | pesquisa agendada |
+| | ⛏️ Mineração | Orbits (fila) e Comets (monitor) |
 | | 📦 Produtos · 🏪 Lojas · 👤 Criadores · 🔴 Lives · 🧭 Nichos | commerce intel |
 | Criação | ✨ Estúdio IA · 🎬 Fábrica de Vídeos · 📁 Biblioteca | produção |
 | Sistema | 💳 Uso & Plano · 🔌 APIs & Conexões | billing e chaves |
@@ -172,7 +204,9 @@ Tudo em JSON (runtime, `gitignore`d) — trocável por Postgres sem tocar nas re
 | `data/agents.json` | agentes + histórico de dossiês |
 | `data/library.json` | biblioteca de mídia/conteúdo |
 | `data/settings.json` | chaves de conectores |
-| `data/jobs.json`, `data/mined*.json`, `data/ingested*.json` | fábrica e mineração |
+| `data/jobs.json` | jobs da Fábrica (execução RunPod, custo, outputs) |
+| `data/orbits.json` · `data/comets.json` | mineração: buscas e monitores com série temporal |
+| `data/ingested.json` | vídeos importados por API (dedupe por `uid`) |
 
 Migração para Postgres: as funções de `credits.py`, `agents.py` e `storage.py`
 concentram todo acesso a disco — é a única camada a reescrever.
@@ -202,7 +236,9 @@ concentram todo acesso a disco — é a única camada a reescrever.
 | 3 | Commerce Intel: produtos, lojas, criadores, lives com GMV em faixa | ✅ feito |
 | 4 | Outlier detection com baseline de criador | ✅ feito |
 | 5 | Research Agents + agendador + entrega externa | ✅ feito |
-| 6 | Estúdio IA + Voice Studio + Fábrica de Vídeos (n8n/RunPod) | ✅ herdado v1 |
+| 6 | Estúdio IA + Voice Studio + Fábrica de Vídeos (RunPod direto) | ✅ v3 |
+| 6b | OAuth real de Reddit/Mercado Livre + 1 credencial por fonte | ✅ v3 |
+| 6c | Mineração própria (Orbit/Comet) + Virlo API como fonte | ✅ v3 |
 | 7 | API pública versionada + servidor MCP + webhooks de alerta | 🟡 manifesto pronto |
 | 8 | Stripe real, assentos/convites, SSO enterprise | ⬜ próximo |
 | 9 | Postgres + Timescale, fila dedicada, multi-região | ⬜ próximo |
@@ -214,8 +250,10 @@ concentram todo acesso a disco — é a única camada a reescrever.
 1. **Nenhum concorrente vê os números internos da plataforma.** Os dados são
    públicos + modelados. Por isso todo GMV sai em faixa e todo score vem com o
    critério explicado na resposta (`criterio` no `/api/outliers`).
-2. **Scraping tem custo e risco jurídico.** A arquitetura prefere APIs oficiais,
-   limita a coleta a uma requisição por busca, respeita timeout e desliga por
-   configuração (`SCRAPLING_ENABLED=0`).
+2. **Coleta tem custo e risco jurídico.** A arquitetura usa apenas APIs oficiais
+   (YouTube/TikTok/Instagram), OAuth (Reddit/Mercado Livre) e fontes de chave
+   própria — nada de scraping de página, nada de fingerprint de navegador. Onde a
+   cobertura oficial não existe (TikTok/IG sem aprovação), a escolha é explícita:
+   ou a **Virlo API** paga por chamada, ou o dado sai rotulado como `demo`.
 3. **Crédito é disjuntor, não só receita.** Sem cobrança por ação, um cliente em
    loop queima a cota da operação inteira — o `charge()` existe por isso.

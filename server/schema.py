@@ -3,7 +3,7 @@
 Motivo: os quatro produtos que o MineraAI unifica (Virlo, Kalodata, DarkLAB e
 ViralFindr) falam de coisas parecidas com nomes diferentes. Aqui existe UM
 esquema por tipo de entidade, com `uid` estável — assim o mesmo vídeo coletado
-pela API oficial, pelo Scrapling ou empurrado pelo n8n é reconhecido como o
+pela API oficial, pela Virlo ou empurrado pela mineração é reconhecido como o
 mesmo registro, e a UI nunca precisa saber de onde o dado veio.
 
 Tipos: video · creator · product · shop · live

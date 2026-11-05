@@ -92,13 +92,21 @@ ACTIONS: dict[str, int] = {
     "ai_narration": 30,
     "agent_run": 100,     # research agent completo (o mesmo preço do Virlo)
     "fabrica_job": 250,   # geração de vídeo (GPU no RunPod)
+    # --- Virlo API (US$ 0,50 por chamada paga ≈ 60 créditos; leitura ~grátis)
+    "virlo_read": 1,
+    "virlo_orbit": 60,
+    "virlo_satellite": 60,
+    "virlo_comet": 60,
+    # --- mineração própria (fila Orbit / monitor Comet)
+    "mining_orbit": 10,
+    "mining_comet": 10,
     "broll": 3,
     "export": 5,
-    "ingest": 0,          # entrada de dados pelo n8n não é cobrada
+    "ingest": 0,          # entrada de dados externos não é cobrada
     "mining": 10,
 }
 
-FREE_ACTIONS = {"ingest", "library"}
+FREE_ACTIONS = {"ingest", "library", "runpod_health"}
 
 
 # ------------------------------------------------------------------ erros
