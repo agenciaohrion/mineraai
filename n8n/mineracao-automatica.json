@@ -1,0 +1,75 @@
+{
+  "name": "MineraAI · Mineração Automática (Radar Viral)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 2 }]
+        }
+      },
+      "id": "b2000000-0000-4000-8000-000000000001",
+      "name": "A cada 2 horas",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edite esta lista com as palavras-chave do seu nicho.\n// O MineraAI minera cada uma via Scrapling e mantém os\n// resultados no Radar Viral por 7 dias (fonte 'coleta').\nconst keywords = [\n  'garrafa térmica',\n  'achadinhos de casa',\n  'skincare barato',\n  'fone bluetooth custo benefício',\n  'organizadores de cozinha'\n];\nreturn [{ json: { keywords } }];"
+      },
+      "id": "b2000000-0000-4000-8000-000000000002",
+      "name": "Palavras-chave do Nicho",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MINERAAI_URL }}/api/mining/run",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ keywords: $json.keywords }) }}",
+        "options": { "timeout": 300000 }
+      },
+      "id": "b2000000-0000-4000-8000-000000000003",
+      "name": "MineraAI · Minerar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [120, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "resumo",
+              "name": "resumo",
+              "value": "={{ $json.results.map(r => `${r.query}: ${r.videos} vídeos`).join(' · ') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2000000-0000-4000-8000-000000000004",
+      "name": "Resumo da Mineração",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [340, 0]
+    }
+  ],
+  "connections": {
+    "A cada 2 horas": {
+      "main": [[{ "node": "Palavras-chave do Nicho", "type": "main", "index": 0 }]]
+    },
+    "Palavras-chave do Nicho": {
+      "main": [[{ "node": "MineraAI · Minerar", "type": "main", "index": 0 }]]
+    },
+    "MineraAI · Minerar": {
+      "main": [[{ "node": "Resumo da Mineração", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
