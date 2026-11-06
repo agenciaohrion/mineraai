@@ -18,7 +18,7 @@ import asyncio
 from typing import Optional
 
 from . import (ai_engine, data as demo, free_sources, metrics, mining, pipeline,
-               providers, runpod, schema, storage, virlo)
+               providers, runpod, schema, storage, virlo, youtube)
 
 PLATFORMS = {"tiktok", "instagram", "youtube", "all"}
 PERIODS = {"24h", "7d", "30d", "90d", "all"}
@@ -57,6 +57,8 @@ def provider_status() -> dict:
             "conectado": tem("IG_ACCESS_TOKEN", "IG_USER_ID"),
             "custo": "Gratuita · conta Business/Creator + revisão de app",
         },
+        # ---------- publicações (OAuth do canal: escreve no YouTube)
+        "youtube_canal": youtube.status_resumo(),
         # ---------- dados pagos
         "virlo": {**virlo.status_resumo(), "grupo": "dados"},
         # ---------- IA (duas integrações separadas)
@@ -259,12 +261,16 @@ async def search_videos(q: str = "tendências", platform: str = "all",
     if not (facets["top_hashtags"] or facets["top_sounds"] or facets["top_creators"]):
         facets = {k: demo_set[k] for k in ("top_hashtags", "top_sounds", "top_creators")}
 
+    # "publicado" é o vídeo que saiu da nossa Fábrica: faz parte do corpus
+    # de mineração igual a um vídeo importado, então conta na mesma linha.
+    publicado = sum(1 for v in videos if v["source"] == "publicado")
     mineracao = sum(1 for v in videos if v["source"] in ("ingestao", "mineracao", "n8n"))
     breakdown = {
         "oficial": sum(1 for v in videos if v["source"] in ("oficial", "api")),
         "virlo": sum(1 for v in videos if v["source"] == "virlo"),
-        "ingestao": mineracao,
-        "mineracao": mineracao,
+        "ingestao": mineracao + publicado,
+        "mineracao": mineracao + publicado,
+        "publicado": publicado,
         "demo": sum(1 for v in videos if v["source"] == "demo"),
     }
 

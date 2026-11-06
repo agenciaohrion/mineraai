@@ -215,6 +215,7 @@ Tudo em JSON (runtime, `gitignore`d) — trocável por Postgres sem tocar nas re
 | `data/orbits.json` · `data/comets.json` | mineração: buscas e monitores com série temporal |
 | `data/ingested.json` | vídeos importados por API (dedupe por `uid`) |
 | `data/media/<tenant>/` | MP4/imagens produzidos pela Fábrica (o arquivo, não o link) |
+| `data/publications.json` | publicações no YouTube + série temporal de métricas |
 
 Migração para Postgres: as funções de `credits.py`, `agents.py` e `storage.py`
 concentram todo acesso a disco — é a única camada a reescrever.
@@ -227,6 +228,13 @@ Por isso o resultado é materializado em `data/media/<tenant>/<job>.<ext>` (stre
 corte por `MEDIA_MAX_MB`, extensão detectada pelos bytes e não pela URL) e servido
 por `GET /api/fabrica/jobs/{id}/file`, com checagem de dono. Falha ao salvar não
 derruba o job: ele fica `pronto` com a URL original e o motivo em `media_error`.
+
+**Publicação.** `server/youtube.py` guarda o OAuth do canal (upload + leitura) e
+`server/publications.py` transforma cada publicação em uma série temporal. A cada
+leitura, o desempenho real do vídeo é empurrado para `mining.ingest_videos(...,
+"publicado", substituir=True)`: o corpus que alimenta o `outlier_score` passa a
+conter o que nós publicamos, e não só o que os outros publicaram. É a diferença
+entre "medir o mercado" e "aprender com o próprio resultado".
 
 **Retenção.** Poda no boot e a cada `RETENTION_INTERVALO_H`: janela
 `RETENTION_DIAS`, mínimo de itens recentes preservados, item sem data nunca apagado.
@@ -262,6 +270,8 @@ monitor), `library` (curadoria) nem `agents`/`tenants`. A mídia só é removida
 | 6 | Estúdio IA + Voice Studio + Fábrica de Vídeos (RunPod direto) | ✅ v3 |
 | 6b | OAuth real de Reddit/Mercado Livre + 1 credencial por fonte | ✅ v3 |
 | 6c | Mineração própria (Orbit/Comet) + Virlo API como fonte | ✅ v3 |
+| 6d | Mídia local + retenção com janela | ✅ v3.1 |
+| 6e | Publicação no YouTube + realimentação do corpus | ✅ v3.2 |
 | 7 | API pública versionada + servidor MCP + webhooks de alerta | 🟡 manifesto pronto |
 | 8 | Stripe real, assentos/convites, SSO enterprise | ⬜ próximo |
 | 9 | Postgres + Timescale, fila dedicada, multi-região | ⬜ próximo |

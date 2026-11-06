@@ -68,6 +68,15 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 ENV_KEYS = [
     # ---- plataformas oficiais
     "YOUTUBE_API_KEY",
+    # OAuth do CANAL (upload) — separado da API key de leitura
+    "YOUTUBE_CLIENT_ID",
+    "YOUTUBE_CLIENT_SECRET",
+    "YOUTUBE_REDIRECT_URI",
+    "YOUTUBE_ACCESS_TOKEN",
+    "YOUTUBE_REFRESH_TOKEN",
+    "YOUTUBE_TOKEN_EXPIRES_AT",
+    "YOUTUBE_CHANNEL_ID",
+    "YOUTUBE_CHANNEL_TITLE",
     "TIKTOK_CLIENT_KEY",
     "TIKTOK_CLIENT_SECRET",
     "IG_ACCESS_TOKEN",
@@ -121,6 +130,10 @@ ENV_KEYS = [
     "RETENTION_ENABLED",        # 1 = poda automática ligada
     "RETENTION_DIAS",           # janela de retenção dos JSONs
     "RETENTION_INTERVALO_H",    # de quanto em quanto tempo a poda roda
+    # ---- publicação e realimentação
+    "PUBLISH_SYNC",             # 1 = mede as publicações em background
+    "PUBLISH_JANELA_DIAS",      # por quantos dias continua medindo cada vídeo
+    "PUBLISH_SYNC_INTERVALO_H", # intervalo entre leituras de métricas
 ]
 
 # Chaves sensíveis (mascaradas na leitura pública)

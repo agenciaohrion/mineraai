@@ -379,8 +379,14 @@ def _ingested() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def ingest_videos(items: list[dict], source_name: str = "ingestao") -> int:
-    """Qualquer integração externa (script, planilha, agente) empurra vídeos aqui."""
+def ingest_videos(items: list[dict], source_name: str = "ingestao",
+                  substituir: bool = False) -> int:
+    """Qualquer integração externa (script, planilha, agente) empurra vídeos aqui.
+
+    `substituir=True` troca o registro existente pelo novo em vez de descartá-lo —
+    é o que a publicação usa para atualizar o desempenho de um vídeo nosso a cada
+    leitura, sem criar duplicatas no corpus.
+    """
     if not items:
         return 0
     novos = []
@@ -393,12 +399,16 @@ def ingest_videos(items: list[dict], source_name: str = "ingestao") -> int:
         v["ingested_at"] = _now()
         novos.append(v)
 
+    def chave(v: dict) -> tuple:
+        return (v.get("platform"), (v.get("title") or "")[:60].lower())
+
     with _lock:
         atuais = _ingested()
-        existentes = {(v.get("platform"), (v.get("title") or "")[:60].lower())
-                      for v in atuais}
-        filtrados = [v for v in novos
-                     if (v.get("platform"), (v.get("title") or "")[:60].lower()) not in existentes]
+        if substituir:
+            novos_chaves = {chave(v) for v in novos}
+            atuais = [v for v in atuais if chave(v) not in novos_chaves]
+        existentes = {chave(v) for v in atuais}
+        filtrados = [v for v in novos if chave(v) not in existentes]
         _write(INGEST_FILE, (filtrados + atuais)[:2000])
     return len(filtrados)
 

@@ -91,6 +91,23 @@ Nada de orquestrador externo: cada integração é chamada direto pelo servidor.
 > O OAuth do Mercado Livre exige que o domínio seja público e HTTPS — o token de
 > acesso dura 6h e é renovado automaticamente pelo próprio servidor.
 
+## Publicar no YouTube (OAuth do canal)
+
+Diferente da `YOUTUBE_API_KEY` (que só lê), publicar exige um **app OAuth**:
+
+1. Google Cloud → APIs e serviços → ative **YouTube Data API v3**.
+2. Tela de consentimento (Externo) com os escopos `youtube.upload` e `youtube.readonly`;
+   adicione a conta dona do canal em *Usuários de teste*.
+3. Credenciais → ID do cliente OAuth (Web) → **URIs de redirecionamento**:
+   `https://seu-dominio.com.br/api/integrations/youtube/callback`
+4. No app: **APIs & Conexões → Canal do YouTube** → preencha client id/secret →
+   **🔗 Autorizar** → escolha o canal.
+
+Cota: 10.000 unidades/dia, ~1.600 por upload (≈6 uploads/dia). A medição de
+desempenho custa 1 unidade por chamada e roda a cada 6h dentro de
+`PUBLISH_JANELA_DIAS` (7 dias). Detalhes e tabela de falhas:
+[`docs/PUBLICACAO.md`](docs/PUBLICACAO.md).
+
 ## Disco: vídeos e retenção
 
 Cada job da Fábrica deixa o MP4 em `data/media/<workspace>/`. Duas alavancas:
@@ -121,4 +138,6 @@ cd /opt/mineraai && git pull         # atualizar para a versão mais nova
 - [ ] `GET /api/integrations` lista os 13 cards e o `.env` foi carregado
 - [ ] Teste individual de cada integração retorna ok (ou explica o que falta)
 - [ ] Um job da Fábrica com `mode: "sync"` devolve o MP4 (requer RunPod)
+- [ ] Canal do YouTube autorizado (`📺 Canal` mostra o nome do canal)
+- [ ] Um job publicado aparece em **Publicações** com views iniciais
 - [ ] `.venv/bin/python -m server.tests_unified` e `-m server.tests_integracoes` passam na VPS

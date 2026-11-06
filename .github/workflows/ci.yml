@@ -42,6 +42,9 @@ jobs:
       - name: Mídia local e retenção
         run: python -m server.tests_media
 
+      - name: Publicação no YouTube e realimentação
+        run: python -m server.tests_publicacao
+
       - name: O app importa e as rotas existem
         run: |
           python - <<'PY'
@@ -56,6 +59,8 @@ jobs:
               "/api/mining/comets", "/api/integrations/meli/callback",
               "/api/integrations/reddit/token", "/api/fabrica/jobs/{job_id}/file",
               "/api/maintenance/status", "/api/maintenance/run",
+              "/api/integrations/youtube/callback", "/api/fabrica/jobs/{job_id}/publicar",
+              "/api/publicacoes", "/api/publicacoes/sync",
           ]
           faltando = [r for r in obrigatorias if r not in rotas]
           assert not faltando, f"rotas ausentes: {faltando}"
