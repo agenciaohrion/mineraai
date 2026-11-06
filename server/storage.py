@@ -116,6 +116,11 @@ ENV_KEYS = [
     "RUNPOD_TIMEOUT",
     "RUNPOD_WORKFLOW_TEMPLATE",
     "RUNPOD_GPU_PRICE_HORA",    # US$/hora da GPU, para estimar custo
+    # ---- mídia e retenção (disco)
+    "MEDIA_MAX_MB",             # teto por arquivo baixado do worker (0 = não baixa)
+    "RETENTION_ENABLED",        # 1 = poda automática ligada
+    "RETENTION_DIAS",           # janela de retenção dos JSONs
+    "RETENTION_INTERVALO_H",    # de quanto em quanto tempo a poda roda
 ]
 
 # Chaves sensíveis (mascaradas na leitura pública)

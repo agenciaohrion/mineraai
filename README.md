@@ -93,6 +93,10 @@ MineraAI ──POST /v2/{endpoint}/runsync──▶ worker ComfyUI no RunPod
         ◀──── {"status":"COMPLETED","output":{"message":"<url do mp4>"}}
 ```
 
+- **O arquivo fica com a gente.** Ao concluir, o MP4 é baixado para
+  `data/media/<workspace>/` e servido por `GET /api/fabrica/jobs/{id}/file` —
+  porque a URL que o RunPod devolve é do S3 deles e **expira**. Se o download
+  falhar, o job continua `pronto` com a URL original e o motivo em `media_error`.
 - **`mode: "sync"`** → `runsync`, espera o vídeo (limite de 20 MB de payload).
 - **`mode: "async"`** → `run` + `GET /status/{id}` com polling
   (`GET /api/fabrica/jobs/{id}/poll`), cancelamento via `/cancel`.
@@ -135,12 +139,15 @@ server/
   virlo.py         # Cliente da Virlo API: Orbit · Comet · Satellite · trends · hashtags
   runpod.py        # Cliente DIRETO do RunPod: submit, status, poll, cancel, custo
   mining.py        # Orbits/Comets: fila de coleta, agendador, série temporal
-  pipeline.py      # Fábrica de Vídeos: jobs + dispatch ao RunPod + polling
+  pipeline.py      # Fábrica de Vídeos: jobs, dispatch ao RunPod, polling e mídia
   data.py          # Motor demo determinístico (vídeos, produtos, lojas, lives)
   ai_engine.py     # Estúdio IA: motor interno + adaptadores OpenAI e Gemini
   storage.py       # Persistência JSON (biblioteca + configurações/chaves)
+  media.py         # Mídia local: download do worker, sniff de formato, órfãos
+  retention.py     # Retenção: janela em dias, tetos e varredura de mídia
   tests_unified.py      # Testes offline: métricas, schema, créditos, agentes
   tests_integracoes.py  # Testes offline: RunPod, Virlo, mineração e as 6 fontes
+  tests_media.py        # Testes offline: mídia local + retenção
 static/            # SPA em JS puro (sem build)
 docs/              # ARQUITETURA · AUTOMACAO (RunPod) · MINERACAO
 data/              # Arquivos persistidos em runtime (gitignored)
@@ -182,6 +189,11 @@ GET/POST/DELETE /api/library
 POST /api/fabrica/jobs                            # {product, prompt, images[], mode: sync|async}
 GET  /api/fabrica/jobs | /api/fabrica/jobs/{id}
 GET  /api/fabrica/jobs/{id}/poll | /cancel
+GET  /api/fabrica/jobs/{id}/file[?download=true]  # arquivo local (não expira)
+
+# manutenção / retenção
+GET  /api/maintenance/status                      # config, uso de disco, última poda
+POST /api/maintenance/run                         # roda a poda agora
 GET  /api/runpod/health | /api/runpod/workflow
 
 # virlo api
@@ -210,11 +222,31 @@ GET  /api/mcp/manifest
 
 ---
 
+## 🗄️ Retenção — nada em disco cresce sem teto
+
+JSON em disco não é log infinito. A poda roda no boot e a cada
+`RETENTION_INTERVALO_H` (padrão 6h), com três regras:
+
+1. os itens mais recentes sempre ficam;
+2. fora isso, vale a janela (`RETENTION_DIAS`, padrão 90);
+3. item sem data **nunca** é apagado — não dá para provar que está velho.
+
+Podados: `jobs`, `usage`, `orbits`, `ingested`. **Não** podados, de propósito:
+`comets` (configuração de monitor do usuário), `library` (curadoria), `agents` e
+`tenants`. A varredura de mídia remove só arquivo **órfão** com mais de 24h — se o
+vídeo está referenciado por um job ou pela Biblioteca, fica.
+
+```bash
+curl localhost:8000/api/maintenance/status   # config, MB em disco, última poda
+curl -X POST localhost:8000/api/maintenance/run
+```
+
 ## 🧪 Testes
 
 ```bash
 .venv/bin/python -m server.tests_unified      # métricas, schema, créditos, agentes
 .venv/bin/python -m server.tests_integracoes  # RunPod, Virlo, mineração e as 6 fontes
+.venv/bin/python -m server.tests_media        # mídia local + retenção
 ```
 
 Nenhum toca a rede: `httpx` é substituído por dublês, então dá para validar
