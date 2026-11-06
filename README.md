@@ -37,6 +37,7 @@ com os seus campos, o seu teste e o seu custo — se uma fonte cai, as outras se
 | **IA** | **OpenAI** e **Gemini** — chaves independentes | `OPENAI_API_KEY`/`MODEL`/`BASE_URL` · `GEMINI_API_KEY`/`MODEL` |
 | **Fontes gratuitas** | **Reddit (OAuth)** · **Mercado Livre (OAuth)** · **Google Suggest** · **oEmbed** · **Google Trends** · **Pexels** | um campo por fonte (ver `.env.example`) |
 | **Produção** | **RunPod Serverless** direto | `RUNPOD_API_KEY` · `RUNPOD_ENDPOINT_ID` · `RUNPOD_GPU_PRICE_HORA` · template do workflow |
+| **Publicação** | **YouTube (OAuth do canal)** — upload + medição | `YOUTUBE_CLIENT_ID/SECRET/REDIRECT_URI` · `PUBLISH_JANELA_DIAS` |
 
 Sem nenhuma chave a plataforma roda em **modo demonstração** (motor determinístico com
 distribuição power-law de views, engajamento derivado, curvas de venda) e cada item
@@ -105,6 +106,23 @@ MineraAI ──POST /v2/{endpoint}/runsync──▶ worker ComfyUI no RunPod
   `CLIPTextEncode`, o seed é randomizado e o custo é estimado por `executionTime × preço da GPU`.
 - Guia completo: [`docs/AUTOMACAO.md`](docs/AUTOMACAO.md).
 
+## 📤 Publicação — o loop fecha aqui
+
+O ciclo parava em "produzir". Agora o vídeo sai da Fábrica direto para o canal:
+
+```
+Fábrica (job pronto) → 📤 Publicar (OAuth do canal, unlisted por padrão)
+                    → YouTube (videos.insert, ~1.600 un. de cota)
+                    → medição a cada 6h por 7 dias (views/likes/comentários)
+                    → corpus da mineração com source "publicado"
+                    → o baseline de outlier passa a incluir o que a gente publicou
+```
+
+O último passo é o que importa: `mining.ingest_videos(..., "publicado", substituir=True)`
+faz o vídeo realimentar o mesmo `outlier_score` que usamos para descobrir tendências.
+Guia completo (app OAuth no Google Cloud, cota, estados de falha, o que não é feito):
+[`docs/PUBLICACAO.md`](docs/PUBLICACAO.md).
+
 ## ⛏️ Mineração: como o Virlo faz, como fazemos
 
 O Virlo não tem API oficial das redes — ele mantém **fila de coleta (Orbit)** +
@@ -143,11 +161,14 @@ server/
   data.py          # Motor demo determinístico (vídeos, produtos, lojas, lives)
   ai_engine.py     # Estúdio IA: motor interno + adaptadores OpenAI e Gemini
   storage.py       # Persistência JSON (biblioteca + configurações/chaves)
+  youtube.py       # OAuth do canal, upload resumable e métricas dos vídeos
+  publications.py  # Publicação + série temporal + realimentação do corpus
   media.py         # Mídia local: download do worker, sniff de formato, órfãos
   retention.py     # Retenção: janela em dias, tetos e varredura de mídia
   tests_unified.py      # Testes offline: métricas, schema, créditos, agentes
   tests_integracoes.py  # Testes offline: RunPod, Virlo, mineração e as 6 fontes
   tests_media.py        # Testes offline: mídia local + retenção
+  tests_publicacao.py   # Testes offline: OAuth, upload, medição, corpus
 static/            # SPA em JS puro (sem build)
 docs/              # ARQUITETURA · AUTOMACAO (RunPod) · MINERACAO
 data/              # Arquivos persistidos em runtime (gitignored)
@@ -190,6 +211,16 @@ POST /api/fabrica/jobs                            # {product, prompt, images[], 
 GET  /api/fabrica/jobs | /api/fabrica/jobs/{id}
 GET  /api/fabrica/jobs/{id}/poll | /cancel
 GET  /api/fabrica/jobs/{id}/file[?download=true]  # arquivo local (não expira)
+
+# publicação (YouTube)
+GET  /api/integrations/youtube/authorize
+GET  /api/integrations/youtube/callback           # retorno do Google (o navegador volta aqui)
+POST /api/integrations/youtube/refresh
+GET  /api/integrations/youtube/canal
+POST /api/fabrica/jobs/{id}/publicar              # titulo, descricao, tags, privacidade
+GET  /api/publicacoes | /api/publicacoes/{id}
+POST /api/publicacoes/sync | /api/publicacoes/{id}/sync
+DELETE /api/publicacoes/{id}                      # remove só o registro local
 
 # manutenção / retenção
 GET  /api/maintenance/status                      # config, uso de disco, última poda
@@ -247,6 +278,7 @@ curl -X POST localhost:8000/api/maintenance/run
 .venv/bin/python -m server.tests_unified      # métricas, schema, créditos, agentes
 .venv/bin/python -m server.tests_integracoes  # RunPod, Virlo, mineração e as 6 fontes
 .venv/bin/python -m server.tests_media        # mídia local + retenção
+.venv/bin/python -m server.tests_publicacao   # OAuth, upload, medição e realimentação
 ```
 
 Nenhum toca a rede: `httpx` é substituído por dublês, então dá para validar

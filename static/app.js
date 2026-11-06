@@ -166,7 +166,7 @@ function videoCard(v) {
     <div class="vid-body">
       <div class="vid-title">${esc(v.title)}</div>
       <div class="vid-author">${esc(v.handle || v.author)} · ${timeAgoH(v.age_hours)}
-        <span class="src-badge src-${v.source}">${{ oficial: "oficial", api: "oficial", virlo: "virlo", ingestao: "mineração", mineracao: "mineração", demo: "demo" }[v.source] || v.source}</span></div>
+        <span class="src-badge src-${v.source}">${{ oficial: "oficial", api: "oficial", virlo: "virlo", ingestao: "mineração", mineracao: "mineração", publicado: "publicado", demo: "demo" }[v.source] || v.source}</span></div>
       <div class="vid-metrics">
         <span>👁 <b>${fmtNum(v.views)}</b></span>
         <span>❤ <b>${fmtNum(v.likes)}</b></span>
@@ -204,6 +204,7 @@ const routes = {
   studio: viewStudio,
   fabrica: viewFabrica,
   biblioteca: viewBiblioteca,
+  publicacoes: viewPublicacoes,
   apis: viewApis,
 };
 
@@ -369,6 +370,7 @@ async function runRadar(saved) {
       <span class="badge green">oficial: ${sb.oficial}</span>
       ${sb.virlo ? `<span class="badge violet">virlo: ${sb.virlo}</span>` : ""}
       ${sb.ingestao ? `<span class="badge gold">mineração: ${sb.ingestao}</span>` : ""}
+      ${sb.publicado ? `<span class="badge green">publicado: ${sb.publicado}</span>` : ""}
       <span class="badge violet">demo: ${sb.demo}</span>
       ${(data.errors || []).length ? `<span class="badge gray" title="${esc((data.errors || []).join(" · "))}">⚠ fontes com erro</span>` : ""}
       ${real === 0 ? '<small style="color:var(--muted)">— conecte chaves em <span class="link-gold" onclick="location.hash=&quot;#/apis&quot;">APIs & Conexões</span>, ligue a Virlo ou minere um Orbit</small>' : ""}
@@ -906,6 +908,7 @@ const JOB_STATUS = {
   enviado: ["📡", "Enviado ao RunPod", "status-enviado"],
   processando: ["🎞️", "Renderizando (RunPod)", "status-processando"],
   pronto: ["✅", "Pronto", "status-pronto"],
+  publicado: ["📤", "Publicado no YouTube", "status-pronto"],
   erro: ["⚠️", "Erro", "status-erro"],
 };
 
@@ -1068,6 +1071,10 @@ async function loadJobs() {
             ? `<button class="btn small primary" onclick="playJob(${jattr(j)})">▶ Assistir</button>` : ""}
           ${j.media_url
             ? `<a class="btn small ghost" href="${j.media_url}" target="_blank" rel="noopener">⬇ Abrir</a>` : ""}
+          ${j.status === "pronto" && j.media_url
+            ? `<button class="btn small" onclick="abrirPublicar(${jattr(j)})">📤 Publicar</button>` : ""}
+          ${j.publicacao_id
+            ? `<a class="btn small ghost" href="#/publicacoes">📤 Ver publicação</a>` : ""}
           <button class="btn small danger" onclick="delJob('${j.id}')">✕</button>
         </td></tr>`;
     }).join("")}</tbody></table>`;
@@ -1606,6 +1613,9 @@ const EXTRA_ACOES = {
   mercadolivre: `<button class="btn small ghost" onclick="meliAuthorize()">🔗 Autorizar (OAuth)</button>
                  <button class="btn small ghost" onclick="meliRefresh()">↻ Renovar token</button>`,
   virlo: `<button class="btn small ghost" onclick="virloSaldo()">💰 Ver saldo</button>`,
+  youtube_canal: `<button class="btn small ghost" onclick="ytAuthorize()">🔗 Autorizar</button>
+                  <button class="btn small ghost" onclick="ytRefresh()">↻ Renovar</button>
+                  <button class="btn small ghost" onclick="ytCanal()">📺 Canal</button>`,
   runpod: `<button class="btn small ghost" onclick="runpodHealth()">🩺 Health</button>`,
 };
 
@@ -1758,6 +1768,38 @@ window.virloSaldo = async () => {
       Orbit/Satellite/Comet custam US$ 0,50 cada (≈60 créditos). Leitura é gratuita.</small>`);
 };
 
+window.ytAuthorize = async () => {
+  const r = await api("/integrations/youtube/authorize");
+  if (!r.ok) return toast(r.message, true);
+  window.open(r.url, "_blank", "noopener");
+  openModal(`<h2>🔗 Autorizar canal do YouTube</h2>
+    <p style="color:var(--muted);font-size:13px">Autorize na aba que abriu, escolhendo o
+    canal que vai publicar. Ao voltar, o servidor troca o código pelos tokens sozinho.</p>
+    <div class="code-line">redirect_uri: ${esc(r.redirect_uri)}</div>
+    <small style="color:var(--faint);display:block;margin-top:10px">
+      Escopos pedidos: upload de vídeo + leitura do canal. O Google só devolve
+      refresh token com <code>access_type=offline</code> — está no pedido.</small>
+    <button class="btn ghost" style="margin-top:10px"
+      onclick="closeModal(); viewApis()">Já autorizei — atualizar</button>`);
+};
+
+window.ytRefresh = async () => {
+  const r = await api("/integrations/youtube/refresh", { method: "POST" });
+  toast(r.message || (r.ok ? "Token renovado" : "Falhou"), !r.ok);
+  viewApis();
+};
+
+window.ytCanal = async () => {
+  const r = await api("/integrations/youtube/canal");
+  if (!r.ok) return toast(r.message || "Canal não autorizado", true);
+  const c = r.canal;
+  openModal(`<h2>📺 ${esc(c.titulo)}</h2>
+    <div class="kv"><span>Channel ID</span><b>${esc(c.id)}</b></div>
+    <div class="kv"><span>Inscritos</span><b>${fmtNum(c.inscritos)}</b></div>
+    <div class="kv"><span>Vídeos</span><b>${fmtNum(c.videos)}</b></div>
+    <div class="kv"><span>Views totais</span><b>${fmtNum(c.views)}</b></div>`);
+};
+
 window.runpodHealth = async () => {
   const r = await api("/runpod/health");
   if (!r.ok) return toast(r.message || "RunPod indisponível", true);
@@ -1766,6 +1808,164 @@ window.runpodHealth = async () => {
     <div class="kv"><span>Workers executando</span><b>${r.workers.executando}</b></div>
     <div class="kv"><span>Na fila</span><b>${r.fila.na_fila}</b></div>
     <div class="kv"><span>Em execução</span><b>${r.fila.em_execucao}</b></div>`);
+};
+
+// ============================================================ PUBLICAÇÕES
+window.abrirPublicar = (job) => {
+  const titulo = (job.product || "Novo vídeo").slice(0, 100);
+  openModal(`<h2>📤 Publicar no YouTube</h2>
+    <p style="color:var(--muted);font-size:13px">O vídeo sobe pela conta do canal
+    autorizado em <b>APIs &amp; Conexões → Canal do YouTube</b>. O padrão é
+    <b>não listado</b> — tornar público é escolha explícita.</p>
+    <div class="field"><label>Título</label>
+      <input id="pub-titulo" maxlength="100" value="${esc(titulo)}" /></div>
+    <div class="field"><label>Descrição</label>
+      <textarea id="pub-desc" rows="3">${esc(job.prompt || "")}</textarea></div>
+    <div class="form-row">
+      <div class="field grow"><label>Tags (separadas por vírgula)</label>
+        <input id="pub-tags" placeholder="garrafa térmica, achadinhos" /></div>
+      <div class="field" style="width:160px"><label>Privacidade</label>
+        <select id="pub-priv">
+          <option value="unlisted" selected>Não listado</option>
+          <option value="private">Privado</option>
+          <option value="public">Público</option>
+        </select></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:10px 0;cursor:pointer">
+      <input type="checkbox" id="pub-kids" style="width:auto" /> Conteúdo feito para crianças
+    </label>
+    <div id="pub-msg"></div>
+    <button class="btn primary" id="pub-go" style="margin-top:10px">📤 Publicar agora</button>
+    <small style="color:var(--faint);display:block;margin-top:8px">
+      Custo: 40 créditos · 1 upload ≈ 1.600 das 10.000 unidades diárias do YouTube.</small>`);
+  $("#pub-go").onclick = () => publicarJob(job.id);
+};
+
+window.publicarJob = async (jobId) => {
+  const titulo = $("#pub-titulo").value.trim();
+  if (titulo.length < 3) return toast("Título muito curto", true);
+  const tags = $("#pub-tags").value.split(",").map(t => t.trim()).filter(Boolean);
+  $("#pub-msg").innerHTML = `<span class="badge gray">enviando para o YouTube…</span>`;
+  $("#pub-go").disabled = true;
+  try {
+    const r = await api(`/fabrica/jobs/${jobId}/publicar`, { method: "POST", body: {
+      titulo, descricao: $("#pub-desc").value.trim(), tags,
+      privacidade: $("#pub-priv").value, made_for_kids: $("#pub-kids").checked } });
+    loadMe();
+    openModal(`<h2>✅ Publicado</h2>
+      <p style="color:var(--muted);font-size:13px">${esc(r.publicacao.titulo)}</p>
+      <div class="code-line">${esc(r.publicacao.url)}</div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <a class="btn primary" href="${esc(r.publicacao.url)}" target="_blank" rel="noopener">▶ Abrir no YouTube</a>
+        <button class="btn" onclick="closeModal(); location.hash='#/publicacoes'; viewPublicacoes()">📤 Ver publicações</button>
+      </div>
+      <small style="color:var(--faint);display:block;margin-top:10px">
+        A partir de agora o desempenho deste vídeo entra no corpus da mineração —
+        é isso que realimenta o baseline de outlier.</small>`);
+    loadJobs();
+  } catch (e) {
+    $("#pub-msg").innerHTML = `<span class="badge red">${esc(e.message)}</span>`;
+    $("#pub-go").disabled = false;
+  }
+};
+
+async function viewPublicacoes() {
+  $("#view").innerHTML = `
+    <div class="page-head"><div>
+      <h1>Publicações 📤</h1>
+      <p>O que saiu da Fábrica e foi ao ar. O desempenho real de cada vídeo volta
+      para o corpus da mineração — o loop fecha aqui.</p>
+    </div>
+    <button class="btn primary" onclick="syncPublicacoes()">↻ Atualizar métricas</button></div>
+    <div id="pub-resumo" class="grid cols-4" style="margin-bottom:14px"></div>
+    <div id="pub-list"><div class="empty">Carregando…</div></div>`;
+
+  let d;
+  try { d = await api("/publicacoes"); }
+  catch (e) { $("#pub-list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+
+  const canal = d.canal || {};
+  if (!d.autorizado) {
+    $("#pub-list").innerHTML = `<div class="empty">
+      Nenhum canal autorizado. Vá em
+      <span class="link-gold" onclick="location.hash='#/apis'">APIs & Conexões</span>
+      → <b>Canal do YouTube</b> → <b>🔗 Autorizar</b>.<br>
+      <small style="color:var(--faint)">Sem o OAuth do canal não há como publicar:
+      upload é escrita, e a API key só lê.</small></div>`;
+  }
+
+  const r = d.resumo || {};
+  const card = (rotulo, valor, extra = "") => `<div class="card">
+      <small style="color:var(--muted)">${rotulo}</small>
+      <h2 style="margin:4px 0">${valor}</h2>
+      <small style="color:var(--faint)">${extra}</small></div>`;
+  $("#pub-resumo").innerHTML =
+    card("Canal", esc(canal.titulo || "—"), d.autorizado ? "conectado" : "não autorizado") +
+    card("Publicados", r.publicados ?? 0, `${r.janela_dias || 7} dias de acompanhamento`) +
+    card("Views totais", fmtNum(r.views_total ?? 0), `${fmtNum(r.likes_total ?? 0)} likes`) +
+    card("No corpus", r.no_corpus ?? 0, "vídeos nossos realimentando o baseline");
+
+  const pubs = d.publicacoes || [];
+  if (!pubs.length) {
+    if (d.autorizado) {
+      $("#pub-list").innerHTML = `<div class="card"><div class="empty">
+        Nada publicado ainda. Gere um vídeo na
+        <span class="link-gold" onclick="location.hash='#/fabrica'">Fábrica</span>
+        e clique em <b>📤 Publicar</b> no job pronto.</div></div>`;
+    }
+    return;
+  }
+
+  $("#pub-list").innerHTML = `<div class="card"><table class="table">
+    <thead><tr><th>Vídeo</th><th>Privacidade</th><th class="num">Views</th>
+      <th class="num">Likes</th><th class="num">Velocidade</th><th>Evolução</th>
+      <th>Última leitura</th><th></th></tr></thead>
+    <tbody>${pubs.map(p => {
+      const s = (p.snapshots || []).slice(-1)[0] || {};
+      const serie = (p.snapshots || []).map(x => x.views || 0);
+      const vel = s.views && s.idade_h ? (s.views / Math.max(1, s.idade_h)) : 0;
+      const cls = { public: "green", unlisted: "gold", private: "gray" }[p.privacidade] || "gray";
+      return `<tr>
+        <td><b>${esc(p.titulo || "(sem título)")}</b><br>
+          <a href="${esc(p.url)}" target="_blank" rel="noopener"
+             style="font-size:11.5px;color:var(--cyan)">${esc(p.video_id)}</a>
+          ${p.erro ? `<br><small style="color:var(--red)">${esc(p.erro)}</small>` : ""}</td>
+        <td><span class="badge ${cls}">${esc(p.privacidade || "—")}</span></td>
+        <td class="num"><b>${fmtNum(s.views || 0)}</b></td>
+        <td class="num">${fmtNum(s.likes || 0)}</td>
+        <td class="num">${vel ? fmtNum(Math.round(vel)) + "/h" : "—"}</td>
+        <td>${serie.length > 1 ? sparkline(serie, 90, 26) : `<small style="color:var(--faint)">${serie.length} leitura</small>`}</td>
+        <td style="color:var(--muted);font-size:12px">${esc((p.ultima_leitura || "—").slice(0, 16).replace("T", " "))}</td>
+        <td style="white-space:nowrap">
+          <button class="btn small" onclick="syncUma('${p.id}')">↻</button>
+          <button class="btn small danger" onclick="apagarPub('${p.id}')">✕</button></td>
+      </tr>`;
+    }).join("")}</tbody></table>
+    <small style="color:var(--faint);display:block;margin-top:10px">
+      Remover aqui apaga só o registro no MineraAI — o vídeo continua no YouTube.</small></div>`;
+}
+
+window.syncPublicacoes = async () => {
+  toast("Consultando o YouTube…");
+  try {
+    const r = await api("/publicacoes/sync", { method: "POST" });
+    toast(`${r.sincronizados} publicação(ões) atualizada(s)` +
+      (r.falhas?.length ? ` · ${r.falhas.length} com erro` : ""), !!r.falhas?.length);
+    viewPublicacoes();
+  } catch (e) { toast(e.message, true); }
+};
+
+window.syncUma = async (id) => {
+  try {
+    await api(`/publicacoes/${id}/sync`, { method: "POST" });
+    loadMe(); viewPublicacoes();
+  } catch (e) { toast(e.message, true); }
+};
+
+window.apagarPub = async (id) => {
+  if (!confirm("Remover o registro? O vídeo continua no YouTube.")) return;
+  await api(`/publicacoes/${id}`, { method: "DELETE" });
+  viewPublicacoes();
 };
 
 // ============================================================ MINERAÇÃO

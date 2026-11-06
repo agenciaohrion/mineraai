@@ -22,8 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (agents, ai_engine, credits, data as demo, free_sources, media,
-               metrics, mining, pipeline, providers, research, retention, runpod,
-               schema, storage, virlo)
+               metrics, mining, pipeline, providers, publications, research,
+               retention, runpod, schema, storage, virlo, youtube)
 
 ROOT = Path(__file__).resolve().parent.parent
 app = FastAPI(title="MineraAI", version="2.0.0",
@@ -70,11 +70,14 @@ async def _startup() -> None:
     # retenção: roda uma vez no boot e depois a cada RETENTION_INTERVALO_H
     if os.environ.get("RETENTION_ENABLED", "1") != "0":
         app.state.retention_task = asyncio.create_task(retention.loop())
+    # medição das publicações (realimenta o corpus com o desempenho real)
+    if os.environ.get("PUBLISH_SYNC", "1") != "0":
+        app.state.publish_task = asyncio.create_task(publications.loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    for attr in ("agents_task", "mining_task", "retention_task"):
+    for attr in ("agents_task", "mining_task", "retention_task", "publish_task"):
         task = getattr(app.state, attr, None)
         if task:
             task.cancel()
@@ -734,6 +737,23 @@ async def test_service(service: str):
     if service == "pexels":
         return await asyncio.to_thread(free_sources.pexels_test)
 
+    # ---- canal do YouTube (OAuth de upload)
+    if service in ("youtube_canal", "youtube_upload"):
+        if not youtube.configured():
+            return {"ok": False,
+                    "message": "Preencha Client ID e Client Secret do app OAuth do Google."}
+        if not youtube.authorized():
+            return {"ok": False,
+                    "message": "Autorize o canal (botão Autorizar) para liberar o upload."}
+        try:
+            c = await asyncio.to_thread(youtube.channel_info)
+            return {"ok": True,
+                    "message": f"Canal conectado: {c['titulo']} — "
+                               f"{c['inscritos']} inscritos, {c['videos']} vídeos",
+                    "detalhe": c}
+        except youtube.YouTubeError as exc:
+            return {"ok": False, "message": str(exc), "status": exc.status}
+
     # ---- produção
     if service == "runpod":
         if not runpod.configured():
@@ -784,16 +804,21 @@ async def meli_callback(body: MeliCallbackIn):
     return await asyncio.to_thread(free_sources.meli_exchange_code, body.code)
 
 
-def _meli_page(ok: bool, mensagem: str) -> str:
-    """Página mínima de retorno do OAuth — sem SPA, sem dependência externa."""
+def _pagina_oauth(ok: bool, titulo: str, mensagem: str,
+                  ancora: str = "/#/apis", link: str = "Voltar para APIs &amp; Conexões") -> str:
+    """Página mínima de retorno do OAuth — sem SPA, sem dependência externa.
+
+    O navegador do usuário cai aqui depois do consentimento. A página não
+    depende de JS do app (que pode nem estar carregado): se deu certo, ela mesma
+    volta para a tela de integrações; se não, mostra o motivo em texto claro.
+    """
     cor = "#22c55e" if ok else "#ef4444"
     icone = "✔" if ok else "✖"
-    titulo = "Mercado Livre autorizado" if ok else "Falha na autorização"
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>{titulo} · MineraAI</title>
-{'<meta http-equiv="refresh" content="2;url=/#/apis" />' if ok else ''}
+{'<meta http-equiv="refresh" content="2;url=' + ancora + '" />' if ok else ''}
 <style>
   body {{ margin:0; min-height:100vh; display:grid; place-items:center;
           background:#0b0f17; color:#e7ecf3;
@@ -809,8 +834,13 @@ def _meli_page(ok: bool, mensagem: str) -> str:
   <div class="ico">{icone}</div>
   <h1>{titulo}</h1>
   <p>{mensagem}</p>
-  <a href="/#/apis">Voltar para APIs &amp; Conexões</a>
+  <a href="{ancora}">{link}</a>
 </div></body></html>"""
+
+
+def _meli_page(ok: bool, mensagem: str) -> str:
+    titulo = "Mercado Livre autorizado" if ok else "Falha na autorização"
+    return _pagina_oauth(ok, titulo, mensagem)
 
 
 @app.get("/api/integrations/meli/callback", response_class=HTMLResponse)
@@ -844,6 +874,133 @@ async def meli_callback_get(code: str = "", state: str = "",
 @app.post("/api/integrations/meli/refresh")
 async def meli_refresh():
     return await asyncio.to_thread(free_sources.meli_refresh)
+
+
+# ---- YouTube: OAuth do canal (upload)
+@app.get("/api/integrations/youtube/authorize")
+async def youtube_authorize():
+    """URL de consentimento com escopo de upload e `access_type=offline`."""
+    return await asyncio.to_thread(youtube.authorize_url, "mineraai")
+
+
+@app.get("/api/integrations/youtube/callback", response_class=HTMLResponse)
+async def youtube_callback_get(code: str = "", state: str = "", error: str = ""):
+    """Retorno do consentimento do Google (GET, sem auth — é o navegador).
+
+    Troca o `code` por refresh/access token, lê o canal e mostra a página de
+    retorno. Sem isso o produto não consegue publicar: o upload é feito em nome
+    do canal que autorizou.
+    """
+    if error or not code:
+        motivo = error or "O Google não devolveu o código de autorização."
+        return HTMLResponse(_pagina_oauth(False, "Falha na autorização do YouTube", motivo),
+                            status_code=400)
+    try:
+        res = await asyncio.to_thread(youtube.exchange_code, code)
+    except youtube.YouTubeError as exc:
+        return HTMLResponse(_pagina_oauth(False, "Falha na autorização do YouTube", str(exc)),
+                            status_code=400)
+
+    canal = (res or {}).get("canal") or {}
+    detalhe = (f"Canal <b>{canal.get('titulo') or 'conectado'}</b> autorizado. "
+               "Já dá para publicar pela Fábrica.")
+    return HTMLResponse(_pagina_oauth(True, "YouTube autorizado", detalhe))
+
+
+@app.post("/api/integrations/youtube/refresh")
+async def youtube_refresh():
+    if not youtube.authorized():
+        return {"ok": False, "message": "Nenhum canal autorizado — use o botão Autorizar."}
+    try:
+        return {"ok": True, "message": "Token renovado", **(await asyncio.to_thread(youtube.refresh))}
+    except youtube.YouTubeError as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+@app.get("/api/integrations/youtube/canal")
+async def youtube_canal_info():
+    if not youtube.authorized():
+        return {"ok": False, "message": "Nenhum canal autorizado ainda.",
+                "redirect_uri": youtube.redirect_uri()}
+    try:
+        c = await asyncio.to_thread(youtube.channel_info)
+        storage.settings_save({"YOUTUBE_CHANNEL_ID": c.get("id", ""),
+                               "YOUTUBE_CHANNEL_TITLE": c.get("titulo", "")})
+        return {"ok": True, "canal": c}
+    except youtube.YouTubeError as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+# ---- Publicações (o passo que fecha o loop)
+class PublicarIn(BaseModel):
+    titulo: str = Field(..., min_length=3)
+    descricao: str = ""
+    tags: list = []
+    privacidade: str = "unlisted"     # unlisted por padrão: público é decisão explícita
+    made_for_kids: bool = False
+
+
+@app.post("/api/fabrica/jobs/{job_id}/publicar")
+async def publicar_job(job_id: str, body: PublicarIn,
+                       tenant: dict = Depends(current_tenant)):
+    """Sobe o vídeo do job no canal autorizado e começa a medir o desempenho."""
+    job = pipeline.job_get(job_id)
+    if not job:
+        raise HTTPException(404, "Job não encontrado")
+    if (job.get("tenant_id") or "demo") != tenant["id"]:
+        raise HTTPException(403, "Este job pertence a outro workspace")
+    if job.get("status") != "pronto":
+        raise HTTPException(409, f"Job está '{job.get('status')}' — só publica job pronto")
+    credits.charge(tenant["id"], "publish", meta={"job": job_id})
+    try:
+        pub = await asyncio.to_thread(
+            publications.publicar, tenant["id"], job, body.titulo, body.descricao,
+            body.tags, body.privacidade, body.made_for_kids)
+    except publications.PublicacaoError as exc:
+        raise HTTPException(400, str(exc))
+    pipeline.job_update(job_id, {"status": "publicado", "publicacao_id": pub["id"],
+                                 "publicado_at": pub["publicado_at"]})
+    return {"publicacao": pub, "ok": True}
+
+
+@app.get("/api/publicacoes")
+async def publicacoes_listar(tenant: dict = Depends(current_tenant)):
+    return {"publicacoes": publications.listar(tenant["id"]),
+            "resumo": publications.resumo(tenant["id"]),
+            "canal": youtube.canal(), "autorizado": youtube.authorized()}
+
+
+@app.get("/api/publicacoes/{pub_id}")
+async def publicacoes_obter(pub_id: str, tenant: dict = Depends(current_tenant)):
+    pub = publications.obter(pub_id, tenant["id"])
+    if not pub:
+        raise HTTPException(404, "Publicação não encontrada")
+    return {"publicacao": pub}
+
+
+@app.post("/api/publicacoes/sync")
+async def publicacoes_sync(tenant: dict = Depends(current_tenant)):
+    """Lê as métricas de todas as publicações dentro da janela de acompanhamento."""
+    return await asyncio.to_thread(publications.sincronizar_tudo, tenant["id"])
+
+
+@app.post("/api/publicacoes/{pub_id}/sync")
+async def publicacoes_sync_uma(pub_id: str, tenant: dict = Depends(current_tenant)):
+    credits.charge(tenant["id"], "publish_sync")
+    try:
+        return {"publicacao": await asyncio.to_thread(
+            publications.sincronizar, pub_id, tenant["id"])}
+    except publications.PublicacaoError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/publicacoes/{pub_id}")
+async def publicacoes_apagar(pub_id: str, tenant: dict = Depends(current_tenant)):
+    """Remove o registro daqui. O vídeo no YouTube **não** é apagado."""
+    if not publications.apagar(pub_id, tenant["id"]):
+        raise HTTPException(404, "Publicação não encontrada")
+    return {"ok": True, "aviso": "A publicação foi removida do MineraAI; "
+                                 "o vídeo continua no YouTube."}
 
 
 @app.get("/api/integrations")
@@ -899,6 +1056,12 @@ def _campos_por_integracao(chave: str) -> list[dict]:
         "trends": [{"k": "TRENDS_GEO", "tipo": "text", "label": "Região (geo)"},
                    {"k": "TRENDS_LANGUAGE", "tipo": "text", "label": "Idioma (hl)"}],
         "pexels": [{"k": "PEXELS_API_KEY", "tipo": "secret", "label": "API key"}],
+        "youtube_canal": [
+            {"k": "YOUTUBE_CLIENT_ID", "tipo": "secret", "label": "Client ID (app OAuth)"},
+            {"k": "YOUTUBE_CLIENT_SECRET", "tipo": "secret", "label": "Client secret"},
+            {"k": "YOUTUBE_REDIRECT_URI", "tipo": "text", "label": "Redirect URI"},
+            {"k": "PUBLISH_JANELA_DIAS", "tipo": "text", "label": "Dias de acompanhamento"},
+        ],
         "runpod": [{"k": "RUNPOD_API_KEY", "tipo": "secret", "label": "API key"},
                    {"k": "RUNPOD_ENDPOINT_ID", "tipo": "text", "label": "Endpoint id"},
                    {"k": "RUNPOD_BASE_URL", "tipo": "text", "label": "Base URL"},

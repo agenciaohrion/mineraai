@@ -92,6 +92,9 @@ ACTIONS: dict[str, int] = {
     "ai_narration": 30,
     "agent_run": 100,     # research agent completo (o mesmo preço do Virlo)
     "fabrica_job": 250,   # geração de vídeo (GPU no RunPod)
+    # --- publicação (upload consome ~1.600 unidades da cota diária do YouTube)
+    "publish": 40,
+    "publish_sync": 1,    # leitura de métricas do vídeo publicado
     # --- Virlo API (US$ 0,50 por chamada paga ≈ 60 créditos; leitura ~grátis)
     "virlo_read": 1,
     "virlo_orbit": 60,

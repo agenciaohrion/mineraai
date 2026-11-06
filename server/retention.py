@@ -31,12 +31,12 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
-from . import credits, media, mining, pipeline, storage
+from . import credits, media, mining, pipeline, publications, storage
 
 DIAS_PADRAO = 90
 INTERVALO_H_PADRAO = 6
 #: quantos itens sobrevivem independentemente da idade, por arquivo
-MANTER = {"jobs": 5, "usage": 100, "orbits": 2, "ingested": 50}
+MANTER = {"jobs": 5, "usage": 100, "orbits": 2, "ingested": 50, "publicacoes": 3}
 
 _ultimo: dict = {}
 
@@ -176,6 +176,8 @@ def run(force: bool = False) -> dict:
         ("orbits", mining.ORBITS_FILE, ("created_at",), mining.MAX_ORBITS),
         # comets ficam de fora: são configuração de monitor, não log
         ("ingested", mining.INGEST_FILE, ("ingested_at", "observed_at"), 2000),
+        ("publicacoes", publications.PUBLICATIONS_FILE, ("publicado_at",),
+         publications.MAX_PUBLICATIONS),
     ]
     for nome, arquivo, campos, teto in alvos:
         try:
