@@ -21,8 +21,9 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (agents, ai_engine, credits, data as demo, free_sources, metrics,
-               mining, pipeline, providers, research, runpod, schema, storage, virlo)
+from . import (agents, ai_engine, credits, data as demo, free_sources, media,
+               metrics, mining, pipeline, providers, research, retention, runpod,
+               schema, storage, virlo)
 
 ROOT = Path(__file__).resolve().parent.parent
 app = FastAPI(title="MineraAI", version="2.0.0",
@@ -66,11 +67,14 @@ async def _startup() -> None:
     # monitor de nicho (Comet) — mesmo formato de agendador dos agents
     if os.environ.get("MINING_SCHEDULER", "1") != "0":
         app.state.mining_task = asyncio.create_task(mining.scheduler_loop(120))
+    # retenção: roda uma vez no boot e depois a cada RETENTION_INTERVALO_H
+    if os.environ.get("RETENTION_ENABLED", "1") != "0":
+        app.state.retention_task = asyncio.create_task(retention.loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    for attr in ("agents_task", "mining_task"):
+    for attr in ("agents_task", "mining_task", "retention_task"):
         task = getattr(app.state, attr, None)
         if task:
             task.cancel()
@@ -368,7 +372,8 @@ async def fabrica_create(body: JobIn, tenant: dict = Depends(current_tenant)):
     credits.charge(tenant["id"], "fabrica_job", meta={"product": body.product})
     job = pipeline.job_create(body.product, body.prompt, body.style,
                              max(2, min(body.duration, 60)),
-                             extra={"images": body.images or []})
+                             extra={"images": body.images or []},
+                             tenant_id=tenant["id"])
     mode = "async" if body.mode == "async" else "sync"
     updated = await pipeline.dispatch_to_runpod(job, mode=mode)
     return {"job": updated, "runpod_configurado": runpod.configured()}
@@ -407,6 +412,27 @@ async def fabrica_cancel(job_id: str):
         return {"job": await pipeline.cancel_job(job_id)}
     except ValueError as exc:
         raise HTTPException(404, str(exc))
+
+
+@app.get("/api/fabrica/jobs/{job_id}/file")
+async def fabrica_file(job_id: str, download: bool = False,
+                       tenant: dict = Depends(current_tenant)):
+    """Serve o arquivo local do job (o vídeo não depende mais do S3 do RunPod).
+
+    A URL do worker expira; este endpoint não. Exige o workspace dono do job.
+    """
+    try:
+        info = pipeline.job_media_file(job_id, tenant["id"])
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    if not info:
+        raise HTTPException(404, "Este job não tem arquivo salvo")
+    if download:
+        # attachment explícito: navegador baixa em vez de abrir
+        return FileResponse(info["path"], media_type=info["media_type"],
+                            filename=f"{job_id}{Path(info['nome']).suffix}")
+    # inline: o <video src> toca direto, sem forçar download
+    return FileResponse(info["path"], media_type=info["media_type"])
 
 
 @app.delete("/api/fabrica/jobs/{job_id}")
@@ -623,6 +649,19 @@ async def library_del(item_id: str):
     if not storage.library_remove(item_id):
         raise HTTPException(404, "Item não encontrado")
     return {"ok": True, "count": len(storage.library_list())}
+
+
+# ------------------------------------------------------------ manutenção / retenção
+@app.get("/api/maintenance/status")
+async def maintenance_status():
+    """Configuração de retenção, uso de disco e último relatório de poda."""
+    return retention.status()
+
+
+@app.post("/api/maintenance/run")
+async def maintenance_run(tenant: dict = Depends(current_tenant)):
+    """Roda a poda agora (sem esperar o ciclo do agendador)."""
+    return await asyncio.to_thread(retention.run, True)
 
 
 # ------------------------------------------------------------ conexões

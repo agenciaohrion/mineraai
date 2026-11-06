@@ -1030,6 +1030,13 @@ async function createJob() {
 }
 window.createJob = createJob;
 
+function fmtBytes(n) {
+  if (!n && n !== 0) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+
 async function loadJobs() {
   const el = $("#fab-jobs");
   if (!el) return;
@@ -1050,13 +1057,17 @@ async function loadJobs() {
         <td><span class="badge gray">${esc(j.style)} · ${j.duration}s</span></td>
         <td><span class="job-status ${cls}">${ico} ${lb}</span>
           ${j.error ? `<br><small style="color:var(--red)">${esc(j.error)}</small>` : ""}
+          ${j.media?.file ? `<br><small style="color:var(--green)">💾 ${fmtBytes(j.media.bytes)}</small>` : ""}
+          ${j.media_error ? `<br><small style="color:var(--gold)" title="${esc(j.media_error)}">⚠ arquivo não salvo</small>` : ""}
           ${j.execution_ms ? `<br><small style="color:var(--faint)">exec ${(j.execution_ms / 1000).toFixed(1)}s</small>` : ""}</td>
         <td class="num">${j.cost_usd != null ? "$" + Number(j.cost_usd).toFixed(4) : "—"}</td>
         <td style="white-space:nowrap">
           ${j.status === "processando" && j.runpod_job_id
             ? `<button class="btn small" onclick="pollJob('${j.id}')">↻ Consultar</button>` : ""}
-          ${j.status === "pronto" && j.video_url
+          ${j.status === "pronto" && (j.media_url || j.video_url)
             ? `<button class="btn small primary" onclick="playJob(${jattr(j)})">▶ Assistir</button>` : ""}
+          ${j.media_url
+            ? `<a class="btn small ghost" href="${j.media_url}" target="_blank" rel="noopener">⬇ Abrir</a>` : ""}
           <button class="btn small danger" onclick="delJob('${j.id}')">✕</button>
         </td></tr>`;
     }).join("")}</tbody></table>`;
@@ -1074,15 +1085,25 @@ window.pollJob = async (id) => {
   } catch (e) { toast(e.message, true); }
 };
 
-window.playJob = (job) => openModal(`
-  <h2>${esc(job.product)}</h2>
-  <video controls autoplay style="width:100%;border-radius:12px;margin-top:12px;background:#000"
-    src="${esc(job.video_url)}"></video>
-  <div style="margin-top:12px;display:flex;gap:10px">
-    <a class="btn primary" href="${esc(job.video_url)}" download>Baixar MP4</a>
-    <button class="btn" onclick="copyText(${jattr(job.video_url)}, 'Link copiado!')">📋 Copiar link</button>
-    ${job.cost_usd != null ? `<span class="badge gold">custo $${Number(job.cost_usd).toFixed(4)}</span>` : ""}
-  </div>`);
+window.playJob = (job) => {
+  // o arquivo salvo no servidor não expira; a URL do worker, sim
+  const src = job.media_url || job.video_url;
+  const expira = !job.media_url && job.video_url;
+  openModal(`
+    <h2>${esc(job.product)}</h2>
+    <video controls autoplay style="width:100%;border-radius:12px;margin-top:12px;background:#000"
+      src="${esc(src)}"></video>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <a class="btn primary" href="${esc(job.media_url ? job.media_url + "?download=true" : job.video_url)}"
+         ${job.media_url ? "download" : ""}>⬇ Baixar</a>
+      <button class="btn" onclick="copyText(${jattr(src)}, 'Link copiado!')">📋 Copiar link</button>
+      ${job.cost_usd != null ? `<span class="badge gold">custo $${Number(job.cost_usd).toFixed(4)}</span>` : ""}
+      ${job.media?.bytes ? `<span class="badge green">${fmtBytes(job.media.bytes)} no servidor</span>` : ""}
+    </div>
+    ${expira ? `<small style="color:var(--gold);display:block;margin-top:8px">
+      ⚠ Este job não tem cópia local — o link é do S3 do RunPod e expira.
+      ${job.media_error ? esc(job.media_error) : ""}</small>` : ""}`);
+};
 
 window.delJob = async (id) => { await api(`/fabrica/jobs/${id}`, { method: "DELETE" }); loadJobs(); };
 
@@ -1113,8 +1134,11 @@ async function viewBiblioteca() {
         <td><b>${esc(i.title || "(sem título)")}</b><br>
           <small style="color:var(--faint)">${esc(i.ref || "")}</small></td>
         <td><span class="badge gray">${i.kind}</span></td>
-        <td style="color:var(--muted)">${i.saved_at?.slice(0, 10)}</td>
-        <td><button class="btn small danger" onclick="removeLib('${i.id}')">Remover</button></td>
+        <td style="color:var(--muted)">${i.saved_at?.slice(0, 10)}
+          ${i.payload?.bytes ? `<br><small style="color:var(--faint)">${fmtBytes(i.payload.bytes)}</small>` : ""}</td>
+        <td style="white-space:nowrap">
+          ${i.payload?.url ? `<a class="btn small primary" href="${i.payload.url}" target="_blank" rel="noopener">▶ Abrir</a>` : ""}
+          <button class="btn small danger" onclick="removeLib('${i.id}')">Remover</button></td>
       </tr>`).join("")}</tbody></table>`;
 }
 window.removeLib = async (id) => {

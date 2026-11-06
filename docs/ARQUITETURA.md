@@ -214,9 +214,25 @@ Tudo em JSON (runtime, `gitignore`d) — trocável por Postgres sem tocar nas re
 | `data/jobs.json` | jobs da Fábrica (execução RunPod, custo, outputs) |
 | `data/orbits.json` · `data/comets.json` | mineração: buscas e monitores com série temporal |
 | `data/ingested.json` | vídeos importados por API (dedupe por `uid`) |
+| `data/media/<tenant>/` | MP4/imagens produzidos pela Fábrica (o arquivo, não o link) |
 
 Migração para Postgres: as funções de `credits.py`, `agents.py` e `storage.py`
 concentram todo acesso a disco — é a única camada a reescrever.
+
+### 3.1 Ciclo de vida do dado — `server/media.py` + `server/retention.py`
+
+**Mídia.** A URL que o worker devolve é do S3 do RunPod e expira: guardá-la como
+única referência transformaria "job concluído" em link quebrado no dia seguinte.
+Por isso o resultado é materializado em `data/media/<tenant>/<job>.<ext>` (streaming,
+corte por `MEDIA_MAX_MB`, extensão detectada pelos bytes e não pela URL) e servido
+por `GET /api/fabrica/jobs/{id}/file`, com checagem de dono. Falha ao salvar não
+derruba o job: ele fica `pronto` com a URL original e o motivo em `media_error`.
+
+**Retenção.** Poda no boot e a cada `RETENTION_INTERVALO_H`: janela
+`RETENTION_DIAS`, mínimo de itens recentes preservados, item sem data nunca apagado.
+Podam `jobs`, `usage`, `orbits` e `ingested`; **não** podam `comets` (configuração de
+monitor), `library` (curadoria) nem `agents`/`tenants`. A mídia só é removida quando
+é órfã — o que preserva todo vídeo salvo na Biblioteca.
 
 ---
 

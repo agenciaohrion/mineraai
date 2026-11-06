@@ -91,6 +91,21 @@ Nada de orquestrador externo: cada integração é chamada direto pelo servidor.
 > O OAuth do Mercado Livre exige que o domínio seja público e HTTPS — o token de
 > acesso dura 6h e é renovado automaticamente pelo próprio servidor.
 
+## Disco: vídeos e retenção
+
+Cada job da Fábrica deixa o MP4 em `data/media/<workspace>/`. Duas alavancas:
+
+```env
+MEDIA_MAX_MB=200          # teto por arquivo (0 = não baixa, mantém só a URL)
+RETENTION_DIAS=90         # janela de retenção dos JSONs
+RETENTION_INTERVALO_H=6   # frequência da poda automática
+```
+
+Acompanhe com `curl localhost:8000/api/maintenance/status` (mostra MB em disco,
+contagens e o último relatório). Para backup, `data/media/` é o que importa de
+verdade: o resto é reconstruível. Se o disco da VPS for pequeno, use
+`MEDIA_MAX_MB=50` e uma janela menor.
+
 ## Rotinas úteis
 
 ```bash
